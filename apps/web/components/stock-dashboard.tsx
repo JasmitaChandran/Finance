@@ -28,6 +28,17 @@ function formatSignedPercent(value: number | null, digits = 2): string {
   return `${sign}${value.toFixed(digits)}%`;
 }
 
+function formatPercentValue(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "-";
+  const numeric = Math.abs(value) < 2 ? value * 100 : value;
+  return `${numeric.toFixed(2)}%`;
+}
+
+function formatNumberValue(value: number | null | undefined, digits = 2): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "-";
+  return value.toFixed(digits);
+}
+
 function computeReturn(current: number | null, base: number | null): number | null {
   if (current === null || base === null || base === 0) return null;
   return ((current - base) / base) * 100;
@@ -265,6 +276,100 @@ export function StockDashboard() {
   const sixMonthReturn = computeReturn(latestClose, halfYearBase);
   const volatility = annualizedVolatility(history);
   const newsPageHref = `/news?symbol=${encodeURIComponent(dashboard?.quote.symbol || "AAPL")}`;
+  const marketData = dashboard?.market_data;
+  const ohlcData = dashboard?.ohlc;
+
+  const basicMarketDataSection = (
+    <div className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
+      <h3 className="font-display text-lg">Basic Market Data</h3>
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">Live Price</p>
+          <p className="mt-1 font-semibold text-textMain">{formatCurrency(marketData?.live_price ?? dashboard?.quote.price, dashboard?.quote.currency)}</p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">% Change (1D / 1W / 1M / 1Y / 5Y)</p>
+          <p className="mt-1 text-textMain">
+            {formatSignedPercent(toNumber(marketData?.changes_percent?.["1d"] ?? null))} / {formatSignedPercent(toNumber(marketData?.changes_percent?.["1w"] ?? null))} /{" "}
+            {formatSignedPercent(toNumber(marketData?.changes_percent?.["1m"] ?? null))} / {formatSignedPercent(toNumber(marketData?.changes_percent?.["1y"] ?? null))} /{" "}
+            {formatSignedPercent(toNumber(marketData?.changes_percent?.["5y"] ?? null))}
+          </p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">Volume</p>
+          <p className="mt-1 font-semibold text-textMain">{formatLarge(marketData?.volume ?? dashboard?.quote.volume)}</p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">Market Cap</p>
+          <p className="mt-1 font-semibold text-textMain">{formatLarge(marketData?.market_cap ?? dashboard?.quote.market_cap)}</p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">52-Week High / Low</p>
+          <p className="mt-1 text-textMain">
+            {formatCurrency(marketData?.week_52_high ?? null, dashboard?.quote.currency)} / {formatCurrency(marketData?.week_52_low ?? null, dashboard?.quote.currency)}
+          </p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">Beta</p>
+          <p className="mt-1 text-textMain">{formatNumberValue(marketData?.beta)}</p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">PE / PB / PEG</p>
+          <p className="mt-1 text-textMain">
+            {formatNumberValue(marketData?.pe)} / {formatNumberValue(marketData?.pb)} / {formatNumberValue(marketData?.peg)}
+          </p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">Dividend Yield</p>
+          <p className="mt-1 text-textMain">{formatPercentValue(marketData?.dividend_yield)}</p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">EPS</p>
+          <p className="mt-1 text-textMain">{formatNumberValue(marketData?.eps)}</p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">Book Value</p>
+          <p className="mt-1 text-textMain">{formatNumberValue(marketData?.book_value)}</p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">ROE</p>
+          <p className="mt-1 text-textMain">{formatPercentValue(marketData?.roe)}</p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">ROCE</p>
+          <p className="mt-1 text-textMain">{formatPercentValue(marketData?.roce)}</p>
+        </div>
+      </div>
+    </div>
+  );
+
+  const ohlcSection = (
+    <div className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
+      <h3 className="font-display text-lg">OHLC Data</h3>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">Open</p>
+          <p className="mt-1 text-textMain">{formatCurrency(ohlcData?.open ?? null, dashboard?.quote.currency)}</p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">High</p>
+          <p className="mt-1 text-textMain">{formatCurrency(ohlcData?.high ?? null, dashboard?.quote.currency)}</p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">Low</p>
+          <p className="mt-1 text-textMain">{formatCurrency(ohlcData?.low ?? null, dashboard?.quote.currency)}</p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">Close</p>
+          <p className="mt-1 text-textMain">{formatCurrency(ohlcData?.close ?? null, dashboard?.quote.currency)}</p>
+        </div>
+        <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+          <p className="text-textMuted">Adjusted Close</p>
+          <p className="mt-1 text-textMain">{formatCurrency(ohlcData?.adjusted_close ?? null, dashboard?.quote.currency)}</p>
+        </div>
+      </div>
+    </div>
+  );
 
   if (error) {
     return (
@@ -523,6 +628,8 @@ export function StockDashboard() {
               )}
             </div>
           </div>
+          {basicMarketDataSection}
+          {ohlcSection}
         </>
       )}
 
@@ -654,6 +761,8 @@ export function StockDashboard() {
               )}
             </div>
           </div>
+          {basicMarketDataSection}
+          {ohlcSection}
         </>
       )}
     </section>

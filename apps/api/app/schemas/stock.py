@@ -28,6 +28,8 @@ class StockDashboard(BaseModel):
     ratios: dict
     financial_highlights: dict
     history: list[dict]
+    market_data: dict | None = None
+    ohlc: dict | None = None
 
 
 class ExplainMetricRequest(BaseModel):

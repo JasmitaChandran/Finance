@@ -36,6 +36,11 @@ class AlphaVantageProvider(StockProvider):
             "price": float(data.get("05. price", 0) or 0),
             "change_percent": float((data.get("10. change percent") or "0").replace("%", "")),
             "market_cap": None,
+            "volume": float(data.get("06. volume", 0) or 0),
+            "open": float(data.get("02. open", 0) or 0),
+            "high": float(data.get("03. high", 0) or 0),
+            "low": float(data.get("04. low", 0) or 0),
+            "close": float(data.get("08. previous close", 0) or 0),
         }
 
     async def get_profile(self, symbol: str) -> dict:
@@ -65,9 +70,18 @@ class AlphaVantageProvider(StockProvider):
             "country": data.get("Country"),
             "trailing_pe": float(data.get("PERatio", 0) or 0),
             "roe": float(data.get("ReturnOnEquityTTM", 0) or 0),
+            "roce": float(data.get("ReturnOnAssetsTTM", 0) or 0),
             "debt_to_equity": float(data.get("DebtToEquity", 0) or 0),
             "profit_margin": float(data.get("ProfitMargin", 0) or 0),
             "revenue_growth": float(data.get("QuarterlyRevenueGrowthYOY", 0) or 0),
+            "pb": float(data.get("PriceToBookRatio", 0) or 0),
+            "peg": float(data.get("PEGRatio", 0) or 0),
+            "dividend_yield": float(data.get("DividendYield", 0) or 0),
+            "eps": float(data.get("EPS", 0) or 0),
+            "book_value": float(data.get("BookValue", 0) or 0),
+            "beta": float(data.get("Beta", 0) or 0),
+            "week_52_high": float(data.get("52WeekHigh", 0) or 0),
+            "week_52_low": float(data.get("52WeekLow", 0) or 0),
         }
 
     async def get_history(self, symbol: str, period: str = "6mo") -> list[dict]:
@@ -92,7 +106,11 @@ class AlphaVantageProvider(StockProvider):
         return [
             {
                 "date": dt,
+                "open": float(data[dt]["1. open"]),
+                "high": float(data[dt]["2. high"]),
+                "low": float(data[dt]["3. low"]),
                 "close": float(data[dt]["4. close"]),
+                "adj_close": float(data[dt]["4. close"]),
                 "volume": float(data[dt]["5. volume"]),
             }
             for dt in ordered_dates

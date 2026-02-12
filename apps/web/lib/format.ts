@@ -1,9 +1,9 @@
-export function formatCurrency(value?: number, currency = "USD") {
+export function formatCurrency(value?: number | null, currency = "USD") {
   if (value === undefined || value === null || Number.isNaN(value)) return "-";
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 2 }).format(value);
 }
 
-export function formatLarge(value?: number) {
+export function formatLarge(value?: number | null) {
   if (value === undefined || value === null || Number.isNaN(value)) return "-";
   if (value >= 1e12) return `${(value / 1e12).toFixed(2)}T`;
   if (value >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
