@@ -12,6 +12,84 @@ import type { NewsSummary, StockDashboard as StockDashboardType, StockSummary } 
 
 const popularSymbols = ["AAPL", "MSFT", "NVDA", "GOOGL", "TSLA", "AMZN", "META", "JPM"];
 
+function toNumber(value: unknown): number | null {
+  if (typeof value !== "number" || Number.isNaN(value)) return null;
+  return value;
+}
+
+function formatSignedPercent(value: number | null, digits = 2): string {
+  if (value === null) return "-";
+  const sign = value >= 0 ? "+" : "";
+  return `${sign}${value.toFixed(digits)}%`;
+}
+
+function computeReturn(current: number | null, base: number | null): number | null {
+  if (current === null || base === null || base === 0) return null;
+  return ((current - base) / base) * 100;
+}
+
+function annualizedVolatility(history: Array<{ close: number }>): number | null {
+  if (history.length < 20) return null;
+
+  const returns: number[] = [];
+  for (let i = 1; i < history.length; i += 1) {
+    const prev = history[i - 1].close;
+    const curr = history[i].close;
+    if (prev > 0) returns.push((curr - prev) / prev);
+  }
+
+  if (!returns.length) return null;
+
+  const mean = returns.reduce((sum, item) => sum + item, 0) / returns.length;
+  const variance = returns.reduce((sum, item) => sum + (item - mean) ** 2, 0) / returns.length;
+  const dailyStd = Math.sqrt(variance);
+
+  return dailyStd * Math.sqrt(252) * 100;
+}
+
+function valuationSignal(pe: number | null) {
+  if (pe === null) {
+    return { label: "Unknown", toneClass: "text-textMuted", description: "Not enough valuation data yet." };
+  }
+  if (pe < 20) {
+    return { label: "Reasonable", toneClass: "text-success", description: "Compared to earnings, this price is not stretched." };
+  }
+  if (pe <= 35) {
+    return { label: "Balanced", toneClass: "text-warning", description: "Valuation is fair, but growth must stay strong." };
+  }
+  return { label: "Expensive", toneClass: "text-danger", description: "Market expects high future growth; risk is higher if growth slows." };
+}
+
+function qualitySignal(roe: number | null, margin: number | null) {
+  if (roe === null && margin === null) {
+    return { label: "Unknown", toneClass: "text-textMuted", description: "Quality score needs ROE and margin data." };
+  }
+
+  const strongRoe = roe !== null && roe >= 0.15;
+  const strongMargin = margin !== null && margin >= 0.12;
+
+  if (strongRoe && strongMargin) {
+    return { label: "Strong", toneClass: "text-success", description: "Business appears efficient and keeps healthy profits." };
+  }
+  if (strongRoe || strongMargin) {
+    return { label: "Mixed", toneClass: "text-warning", description: "One quality metric is strong, but not both." };
+  }
+  return { label: "Weak", toneClass: "text-danger", description: "Profit quality appears low versus peers." };
+}
+
+function debtSignal(debtToEquity: number | null) {
+  if (debtToEquity === null) {
+    return { label: "Unknown", toneClass: "text-textMuted", description: "Debt data unavailable from provider." };
+  }
+  if (debtToEquity < 80) {
+    return { label: "Comfortable", toneClass: "text-success", description: "Debt level looks manageable for most sectors." };
+  }
+  if (debtToEquity <= 150) {
+    return { label: "Watch", toneClass: "text-warning", description: "Debt is moderate; cash flow quality matters more here." };
+  }
+  return { label: "High", toneClass: "text-danger", description: "Leverage is high and can increase downside during stress." };
+}
+
 export function StockDashboard() {
   const { mode, language } = useUI();
   const [query, setQuery] = useState("AAPL");
@@ -21,6 +99,8 @@ export function StockDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [voiceMode, setVoiceMode] = useState(false);
+
+  const isBeginner = mode === "beginner";
   const newsBullets = (news?.bullets ?? []).map((bullet) => bullet.trim()).filter(Boolean);
 
   const copy = useMemo(
@@ -28,37 +108,42 @@ export function StockDashboard() {
       language === "es"
         ? {
             heading: "Centro de Analisis AI",
-            sub: "Explicaciones simples, analisis claro y accion inteligente.",
-            intro: "Piensa en esto como Google Maps para invertir: menos ruido, mejores decisiones.",
+            beginnerSub: "Modo principiante: menos datos, mas claridad y guias concretas.",
+            proSub: "Modo pro: senales cuantitativas, mas contexto y lectura avanzada.",
+            intro: "Piensa en esto como un copiloto de inversion: simple cuando empiezas, detallado cuando avanzas.",
             explore: "Explorar"
           }
         : {
             heading: "AI Stock Insight Hub",
-            sub: "Simple explanations, clear risk lens, and actionable context.",
-            intro: "Think of this as Google Maps for investing: less noise, smarter direction.",
+            beginnerSub: "Beginner mode: fewer numbers, clearer decisions, practical guidance.",
+            proSub: "Pro mode: denser analytics, richer context, faster evaluation workflow.",
+            intro: "Think of this as an investing copilot: simple when you start, detailed when you level up.",
             explore: "Explore"
           },
     [language]
   );
 
-  const load = useCallback(async (symbol: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [dash, summaryRes, newsRes] = await Promise.all([
-        api.getDashboard(symbol),
-        api.getSummary(symbol, mode),
-        api.getNewsSummary(symbol)
-      ]);
-      setDashboard(dash);
-      setSummary(summaryRes);
-      setNews(newsRes);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load stock data.");
-    } finally {
-      setLoading(false);
-    }
-  }, [mode]);
+  const load = useCallback(
+    async (symbol: string) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [dash, summaryRes, newsRes] = await Promise.all([
+          api.getDashboard(symbol),
+          api.getSummary(symbol, mode),
+          api.getNewsSummary(symbol)
+        ]);
+        setDashboard(dash);
+        setSummary(summaryRes);
+        setNews(newsRes);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load stock data.");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [mode]
+  );
 
   useEffect(() => {
     load("AAPL");
@@ -72,6 +157,24 @@ export function StockDashboard() {
     window.speechSynthesis.speak(utterance);
     setVoiceMode(true);
   }
+
+  const pe = toNumber(dashboard?.ratios.pe);
+  const roe = toNumber(dashboard?.ratios.roe);
+  const debtToEquity = toNumber(dashboard?.ratios.debt_to_equity);
+  const revenueGrowth = toNumber(dashboard?.ratios.revenue_growth);
+  const profitMargin = toNumber(dashboard?.ratios.profit_margin);
+
+  const valuation = valuationSignal(pe);
+  const quality = qualitySignal(roe, profitMargin);
+  const leverage = debtSignal(debtToEquity);
+
+  const history = dashboard?.history ?? [];
+  const latestClose = history.length ? history[history.length - 1].close : null;
+  const monthBase = history.length > 21 ? history[history.length - 22].close : history[0]?.close ?? null;
+  const halfYearBase = history[0]?.close ?? null;
+  const oneMonthReturn = computeReturn(latestClose, monthBase);
+  const sixMonthReturn = computeReturn(latestClose, halfYearBase);
+  const volatility = annualizedVolatility(history);
 
   if (error) {
     return (
@@ -87,10 +190,10 @@ export function StockDashboard() {
         <div className="grid gap-5 md:grid-cols-[1.2fr_1fr] md:items-center">
           <div>
             <p className="mb-2 inline-flex items-center rounded-full bg-accent/10 px-3 py-1 text-xs text-accent">
-              <Sparkles className="mr-1 h-3.5 w-3.5" /> Beginner-Friendly + Pro-Ready
+              <Sparkles className="mr-1 h-3.5 w-3.5" /> {isBeginner ? "Beginner View" : "Pro View"}
             </p>
             <h1 className="font-display text-3xl leading-tight md:text-4xl">{copy.heading}</h1>
-            <p className="mt-3 max-w-2xl text-sm text-textMuted md:text-base">{copy.sub}</p>
+            <p className="mt-3 max-w-2xl text-sm text-textMuted md:text-base">{isBeginner ? copy.beginnerSub : copy.proSub}</p>
             <p className="mt-2 max-w-2xl text-xs text-textMuted">{copy.intro}</p>
           </div>
           <form
@@ -132,9 +235,132 @@ export function StockDashboard() {
 
       {loading && <div className="rounded-2xl border border-borderGlass bg-card p-6 text-sm text-textMuted">Loading insights...</div>}
 
-      {!loading && dashboard && summary && (
+      {!loading && dashboard && summary && isBeginner && (
         <>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-3">
+            <article className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
+              <p className="text-xs uppercase tracking-wide text-textMuted">Is it expensive?</p>
+              <p className="mt-2 text-2xl font-semibold text-textMain">{pe === null ? "-" : pe.toFixed(2)} P/E</p>
+              <p className={`mt-2 text-sm font-medium ${valuation.toneClass}`}>{valuation.label}</p>
+              <p className="mt-1 text-xs text-textMuted">{valuation.description}</p>
+            </article>
+
+            <article className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
+              <p className="text-xs uppercase tracking-wide text-textMuted">Business quality</p>
+              <p className="mt-2 text-2xl font-semibold text-textMain">{ratioToPercent(roe)} ROE</p>
+              <p className={`mt-2 text-sm font-medium ${quality.toneClass}`}>{quality.label}</p>
+              <p className="mt-1 text-xs text-textMuted">{quality.description}</p>
+            </article>
+
+            <article className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
+              <p className="text-xs uppercase tracking-wide text-textMuted">Financial safety</p>
+              <p className="mt-2 text-2xl font-semibold text-textMain">{debtToEquity === null ? "-" : debtToEquity.toFixed(2)}</p>
+              <p className={`mt-2 text-sm font-medium ${leverage.toneClass}`}>{leverage.label}</p>
+              <p className="mt-1 text-xs text-textMuted">{leverage.description}</p>
+            </article>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
+            <PriceChart data={dashboard.history} symbol={dashboard.quote.symbol} />
+
+            <div className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
+              <h3 className="font-display text-lg">Beginner Coach</h3>
+              <p className="mt-2 text-sm text-textMuted">{summary.eli15_summary}</p>
+
+              <div className="mt-4 space-y-3 rounded-xl border border-borderGlass bg-bgSoft p-3">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-textMuted">Current Price</span>
+                  <span className="font-semibold text-textMain">{formatCurrency(dashboard.quote.price, dashboard.quote.currency)}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-textMuted">Monthly Momentum</span>
+                  <span className={oneMonthReturn !== null && oneMonthReturn >= 0 ? "text-success" : "text-danger"}>{formatSignedPercent(oneMonthReturn)}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-textMuted">Risk Level</span>
+                  <span className="text-textMain">{summary.risk_level}</span>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3">
+                <MetricChip
+                  label="P/E Ratio"
+                  metricKey="pe"
+                  symbol={dashboard.quote.symbol}
+                  rawValue={dashboard.ratios.pe ?? null}
+                  value={dashboard.ratios.pe ? Number(dashboard.ratios.pe).toFixed(2) : "-"}
+                />
+                <MetricChip
+                  label="ROE"
+                  metricKey="roe"
+                  symbol={dashboard.quote.symbol}
+                  rawValue={dashboard.ratios.roe ?? null}
+                  value={ratioToPercent(dashboard.ratios.roe)}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="font-display text-lg">Simple Investment Snapshot</h3>
+                <button onClick={speakSummary} className="rounded-lg border border-borderGlass px-2 py-1 text-xs text-textMuted hover:text-textMain">
+                  Voice explain
+                </button>
+              </div>
+
+              <p className="text-sm text-textMuted">Who is this better for?</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {summary.suitable_for.map((group) => (
+                  <span key={group} className="rounded-full border border-borderGlass bg-bgSoft px-3 py-1 text-xs text-textMain">
+                    {group}
+                  </span>
+                ))}
+              </div>
+
+              <div className="mt-4 rounded-xl border border-borderGlass bg-bgSoft p-3">
+                <p className="text-xs uppercase tracking-wide text-textMuted">Quick advice</p>
+                <p className="mt-1 text-sm text-textMuted">{summary.bull_case}</p>
+                <p className="mt-2 text-sm text-textMuted">Watchout: {summary.bear_case}</p>
+              </div>
+
+              {voiceMode && <p className="mt-2 text-xs text-textMuted">Voice explainer started via browser speech API.</p>}
+            </div>
+
+            <div className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
+              <h3 className="font-display text-lg">AI News Summary</h3>
+              {!news ? (
+                <p className="mt-2 text-sm text-textMuted">No news data yet.</p>
+              ) : (
+                <>
+                  <div className="mt-3 flex items-center gap-2">
+                    {news.sentiment === "Positive" && <ShieldCheck className="h-4 w-4 text-success" />}
+                    {news.sentiment === "Neutral" && <TriangleAlert className="h-4 w-4 text-warning" />}
+                    {news.sentiment === "Negative" && <ShieldAlert className="h-4 w-4 text-danger" />}
+                    <p className="text-sm text-textMuted">
+                      Sentiment: <span className="text-textMain">{news.sentiment}</span> ({news.source_count} sources)
+                    </p>
+                  </div>
+                  <ul className="mt-4 space-y-2 text-sm text-textMuted">
+                    {newsBullets.slice(0, 5).map((bullet) => (
+                      <li key={bullet} className="rounded-lg border border-borderGlass bg-bgSoft p-3">
+                        <ArrowUpRight className="mr-2 inline h-3.5 w-3.5 text-accent" />
+                        {bullet}
+                      </li>
+                    ))}
+                    {!newsBullets.length && <li className="rounded-lg border border-borderGlass bg-bgSoft p-3">No readable headlines found. Try refreshing.</li>}
+                  </ul>
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {!loading && dashboard && summary && !isBeginner && (
+        <>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <MetricChip
               label="P/E Ratio"
               metricKey="pe"
@@ -163,23 +389,32 @@ export function StockDashboard() {
               rawValue={dashboard.ratios.revenue_growth ?? null}
               value={ratioToPercent(dashboard.ratios.revenue_growth)}
             />
+            <MetricChip
+              label="Profit Margin"
+              metricKey="profit_margin"
+              symbol={dashboard.quote.symbol}
+              rawValue={dashboard.ratios.profit_margin ?? null}
+              value={ratioToPercent(dashboard.ratios.profit_margin)}
+            />
           </div>
 
           <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
             <PriceChart data={dashboard.history} symbol={dashboard.quote.symbol} />
 
             <div className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
-              <h3 className="font-display text-lg">{dashboard.quote.name}</h3>
+              <h3 className="font-display text-lg">Quant Snapshot</h3>
               <p className="text-xs text-textMuted">{dashboard.profile.sector} • {dashboard.profile.industry}</p>
-              <p className="mt-3 text-3xl font-semibold">{formatCurrency(dashboard.quote.price, dashboard.quote.currency)}</p>
-              <p className={`mt-1 text-sm ${Number(dashboard.quote.change_percent || 0) >= 0 ? "text-success" : "text-danger"}`}>
-                {Number(dashboard.quote.change_percent || 0).toFixed(2)}%
-              </p>
 
-              <div className="mt-5 space-y-3 text-sm">
+              <div className="mt-4 space-y-3 text-sm">
+                <div className="flex items-center justify-between text-textMuted"><span>Price</span><span className="text-textMain">{formatCurrency(dashboard.quote.price, dashboard.quote.currency)}</span></div>
                 <div className="flex items-center justify-between text-textMuted"><span>Market Cap</span><span className="text-textMain">{formatLarge(dashboard.quote.market_cap as number)}</span></div>
-                <div className="flex items-center justify-between text-textMuted"><span>Country</span><span className="text-textMain">{dashboard.profile.country || "-"}</span></div>
-                <div className="flex items-center justify-between text-textMuted"><span>Mode</span><span className="text-textMain">{mode === "beginner" ? "Simplified" : "Detailed"}</span></div>
+                <div className="flex items-center justify-between text-textMuted"><span>1M Return</span><span className={oneMonthReturn !== null && oneMonthReturn >= 0 ? "text-success" : "text-danger"}>{formatSignedPercent(oneMonthReturn)}</span></div>
+                <div className="flex items-center justify-between text-textMuted"><span>6M Return</span><span className={sixMonthReturn !== null && sixMonthReturn >= 0 ? "text-success" : "text-danger"}>{formatSignedPercent(sixMonthReturn)}</span></div>
+                <div className="flex items-center justify-between text-textMuted"><span>Ann. Volatility</span><span className="text-textMain">{volatility === null ? "-" : `${volatility.toFixed(2)}%`}</span></div>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-borderGlass bg-bgSoft p-3 text-xs text-textMuted">
+                {dashboard.profile.description ? dashboard.profile.description.slice(0, 220) : "Company profile not available from provider."}
               </div>
             </div>
           </div>
@@ -187,11 +422,12 @@ export function StockDashboard() {
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="font-display text-lg">AI Stock Summary</h3>
+                <h3 className="font-display text-lg">AI Stock Summary (Pro Lens)</h3>
                 <button onClick={speakSummary} className="rounded-lg border border-borderGlass px-2 py-1 text-xs text-textMuted hover:text-textMain">
                   Voice explain
                 </button>
               </div>
+
               <p className="text-sm text-textMuted">{summary.eli15_summary}</p>
               <div className="mt-4 grid gap-3">
                 <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
@@ -205,9 +441,7 @@ export function StockDashboard() {
               </div>
 
               <div className="mt-4 flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-borderGlass bg-bgSoft px-3 py-1 text-xs">
-                  Risk: {summary.risk_level}
-                </span>
+                <span className="rounded-full border border-borderGlass bg-bgSoft px-3 py-1 text-xs">Risk: {summary.risk_level}</span>
                 {summary.suitable_for.map((group) => (
                   <span key={group} className="rounded-full border border-borderGlass bg-bgSoft px-3 py-1 text-xs text-textMuted">
                     {group}
@@ -228,7 +462,9 @@ export function StockDashboard() {
                     {news.sentiment === "Positive" && <ShieldCheck className="h-4 w-4 text-success" />}
                     {news.sentiment === "Neutral" && <TriangleAlert className="h-4 w-4 text-warning" />}
                     {news.sentiment === "Negative" && <ShieldAlert className="h-4 w-4 text-danger" />}
-                    <p className="text-sm text-textMuted">Sentiment: <span className="text-textMain">{news.sentiment}</span> ({news.source_count} sources)</p>
+                    <p className="text-sm text-textMuted">
+                      Sentiment: <span className="text-textMain">{news.sentiment}</span> ({news.source_count} sources)
+                    </p>
                   </div>
                   <ul className="mt-4 space-y-2 text-sm text-textMuted">
                     {newsBullets.slice(0, 5).map((bullet) => (
@@ -237,9 +473,7 @@ export function StockDashboard() {
                         {bullet}
                       </li>
                     ))}
-                    {!newsBullets.length && (
-                      <li className="rounded-lg border border-borderGlass bg-bgSoft p-3">No readable headlines found. Try refreshing.</li>
-                    )}
+                    {!newsBullets.length && <li className="rounded-lg border border-borderGlass bg-bgSoft p-3">No readable headlines found. Try refreshing.</li>}
                   </ul>
                 </>
               )}
