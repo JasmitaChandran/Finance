@@ -4,6 +4,7 @@ from fastapi import APIRouter, Query
 
 from app.schemas.stock import ExplainMetricRequest, StockSummaryRequest
 from app.services.ai_service import ai_service
+from app.services.smart_insights_service import smart_insights_service
 from app.services.stock_service import stock_service
 from app.services.universe_service import universe_service
 
@@ -47,6 +48,11 @@ async def dashboard(symbol: str):
 @router.get("/{symbol}/financials")
 async def financials(symbol: str, years: int = Query(default=10, ge=3, le=15)):
     return await stock_service.financial_statements(symbol, years=years)
+
+
+@router.get("/{symbol}/smart-insights")
+async def smart_insights(symbol: str):
+    return await smart_insights_service.build(symbol)
 
 
 @router.post("/explain-metric")

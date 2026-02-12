@@ -198,6 +198,84 @@ export interface ValuationEngineData {
   relative_valuation: RelativeValuationData;
 }
 
+export interface SmartInsightsData {
+  symbol: string;
+  generated_at: string;
+  ai_stock_summary: {
+    eli15_summary: string;
+    bull_case: string;
+    bear_case: string;
+    risk_level: string;
+    suitable_for: string[];
+  };
+  eli15_summary?: string | null;
+  earnings_call_transcript_summary: {
+    available: boolean;
+    source: string;
+    quarter?: string | null;
+    summary: string;
+    highlights: string[];
+    risk_flags: string[];
+  };
+  risk_analysis_plain_english: {
+    risk_score: number;
+    risk_level: "Low" | "Medium" | "High" | string;
+    explanation: string;
+    factors: Array<{
+      factor: string;
+      value?: string | number | null;
+      level: "Low" | "Medium" | "High" | string;
+      detail: string;
+    }>;
+  };
+  fraud_detection_signals: {
+    risk_score: number;
+    risk_level: "Low" | "Medium" | "High" | string;
+    summary: string;
+    signals: Array<{
+      name: string;
+      value?: number | null;
+      threshold: string;
+      triggered: boolean;
+      severity: "high" | "medium" | "low" | string;
+      detail: string;
+    }>;
+  };
+  earnings_surprise_probability: {
+    beat_probability: number;
+    miss_probability: number;
+    confidence: number;
+    sample_quarters: number;
+    average_surprise_percent?: number | null;
+    explanation: string;
+  };
+  forecast_revenue_ml: {
+    model: string;
+    history: Array<{ year: number; revenue: number }>;
+    forecast: Array<{ year: number; revenue: number }>;
+    r2_score?: number | null;
+    estimated_cagr_percent?: number | null;
+    explanation: string;
+  };
+  sentiment_analysis_from_news: {
+    label: "Positive" | "Neutral" | "Negative" | string;
+    score: number;
+    positive_hits: number;
+    negative_hits: number;
+    highlights: string[];
+    source_count: number;
+    summary_sentiment?: string;
+  };
+  buy_sell_probability_score: {
+    buy_probability: number;
+    sell_probability: number;
+    hold_probability: number;
+    recommendation: string;
+    confidence: number;
+    rationale: string[];
+  };
+}
+
 export interface StockDashboard {
   quote: StockQuote;
   profile: StockProfile;

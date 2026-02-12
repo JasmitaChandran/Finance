@@ -1,4 +1,4 @@
-import type { NewsArticle, NewsSummary, StockDashboard, StockSummary, User } from "@/lib/types";
+import type { NewsArticle, NewsSummary, SmartInsightsData, StockDashboard, StockSummary, User } from "@/lib/types";
 
 const FALLBACK_API_BASE = "/api/v1";
 const RAW_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || FALLBACK_API_BASE;
@@ -73,6 +73,7 @@ export const api = {
       `/stocks/${symbol}/history?period=${encodeURIComponent(period)}`
     ),
   getDashboard: (symbol: string) => call<StockDashboard>(`/stocks/${symbol}/dashboard`),
+  getSmartInsights: (symbol: string) => call<SmartInsightsData>(`/stocks/${symbol}/smart-insights`),
   explainMetric: (metric: string, value?: number, symbol?: string) =>
     call<{ title: string; simple_explanation: string; analogy: string; what_good_looks_like: string; caution: string }>(
       "/stocks/explain-metric",

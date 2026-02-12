@@ -922,15 +922,23 @@ class StockService:
         }
 
     async def _from_providers(self, method_name: str, *args, **kwargs):
-        last_error = None
+        errors: list[str] = []
         for provider in self.providers:
+            ready = getattr(provider, "_ready", None)
+            if callable(ready):
+                try:
+                    if not ready():
+                        continue
+                except Exception:
+                    pass
             try:
                 method = getattr(provider, method_name)
                 return await method(*args, **kwargs)
             except Exception as exc:  # pragma: no cover
-                last_error = exc
+                errors.append(f"{provider.name}: {exc}")
                 continue
-        raise HTTPException(status_code=503, detail=f"Data providers unavailable: {last_error}")
+        detail = errors[0] if errors else "No configured providers are available."
+        raise HTTPException(status_code=503, detail=f"Data providers unavailable: {detail}")
 
     async def search(self, query: str) -> list[dict]:
         key = f"search:{query.lower()}"
