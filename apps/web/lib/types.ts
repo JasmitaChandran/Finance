@@ -24,6 +24,30 @@ export interface StockProfile {
   country?: string;
 }
 
+export interface FinancialStatementRow {
+  metric: string;
+  values: Record<string, number | null>;
+  yoy_growth: Record<string, number | null>;
+  cagr: number | null;
+}
+
+export interface FinancialStatementBlock {
+  raw: FinancialStatementRow[];
+  common_size: FinancialStatementRow[];
+  base_metric?: string | null;
+}
+
+export interface FinancialStatementsData {
+  years: string[];
+  income_statement: FinancialStatementBlock;
+  balance_sheet: FinancialStatementBlock;
+  cash_flow: FinancialStatementBlock;
+  meta?: {
+    requested_years?: number;
+    available_years?: number;
+  };
+}
+
 export interface StockDashboard {
   quote: StockQuote;
   profile: StockProfile;
@@ -54,6 +78,7 @@ export interface StockDashboard {
     close?: number | null;
     adjusted_close?: number | null;
   };
+  financial_statements?: FinancialStatementsData | null;
 }
 
 export interface StockSummary {

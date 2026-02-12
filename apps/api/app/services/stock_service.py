@@ -89,11 +89,24 @@ class StockService:
         ]
         return self._sanitize_json(safe_history)
 
+    async def financial_statements(self, symbol: str, years: int = 10) -> dict:
+        key = f"financials:{symbol.upper()}:{years}"
+        data = await cache.remember(
+            key,
+            lambda: self._from_providers("get_financials", symbol, years),
+            ttl_seconds=6 * 3600,
+        )
+        return self._sanitize_json(data)
+
     async def dashboard(self, symbol: str) -> dict:
         quote = await self.quote(symbol)
         profile = await self.profile(symbol)
         history = await self.history(symbol)
         history_5y = await self.history(symbol, period="5y")
+        try:
+            financial_statements = await self.financial_statements(symbol, years=10)
+        except HTTPException:
+            financial_statements = {"years": [], "income_statement": {"raw": [], "common_size": []}, "balance_sheet": {"raw": [], "common_size": []}, "cash_flow": {"raw": [], "common_size": []}}
 
         ratios = {
             "pe": profile.get("trailing_pe"),
@@ -169,6 +182,7 @@ class StockService:
             "history": history,
             "market_data": market_data,
             "ohlc": ohlc,
+            "financial_statements": financial_statements,
         }
         return self._sanitize_json(dashboard)
 

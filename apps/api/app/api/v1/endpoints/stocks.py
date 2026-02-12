@@ -44,6 +44,11 @@ async def dashboard(symbol: str):
     return await stock_service.dashboard(symbol)
 
 
+@router.get("/{symbol}/financials")
+async def financials(symbol: str, years: int = Query(default=10, ge=3, le=15)):
+    return await stock_service.financial_statements(symbol, years=years)
+
+
 @router.post("/explain-metric")
 async def explain_metric(payload: ExplainMetricRequest):
     return await ai_service.explain_metric(payload.metric, payload.value, payload.symbol)

@@ -30,6 +30,7 @@ class StockDashboard(BaseModel):
     history: list[dict]
     market_data: dict | None = None
     ohlc: dict | None = None
+    financial_statements: dict | None = None
 
 
 class ExplainMetricRequest(BaseModel):

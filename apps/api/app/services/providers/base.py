@@ -21,3 +21,7 @@ class StockProvider(ABC):
     @abstractmethod
     async def search(self, query: str) -> list[dict]:
         raise NotImplementedError
+
+    @abstractmethod
+    async def get_financials(self, symbol: str, years: int = 10) -> dict:
+        raise NotImplementedError

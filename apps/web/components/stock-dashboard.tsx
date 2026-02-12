@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowUpRight, ShieldAlert, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { FinancialStatementsPanel } from "@/components/financial-statements-panel";
 import { MetricChip } from "@/components/metric-chip";
 import { PriceChart } from "@/components/price-chart";
 import { useUI } from "@/components/providers";
@@ -370,6 +371,7 @@ export function StockDashboard() {
       </div>
     </div>
   );
+  const financialStatementsSection = <FinancialStatementsPanel data={dashboard?.financial_statements} />;
 
   if (error) {
     return (
@@ -630,6 +632,7 @@ export function StockDashboard() {
           </div>
           {basicMarketDataSection}
           {ohlcSection}
+          {financialStatementsSection}
         </>
       )}
 
@@ -763,6 +766,7 @@ export function StockDashboard() {
           </div>
           {basicMarketDataSection}
           {ohlcSection}
+          {financialStatementsSection}
         </>
       )}
     </section>

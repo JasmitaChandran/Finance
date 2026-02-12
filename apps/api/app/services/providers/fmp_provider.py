@@ -134,3 +134,6 @@ class FMPProvider(StockProvider):
             for row in payload
             if row.get("symbol")
         ]
+
+    async def get_financials(self, symbol: str, years: int = 10) -> dict:
+        raise RuntimeError("FMP financial statements endpoint not enabled in this implementation")

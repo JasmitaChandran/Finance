@@ -140,3 +140,6 @@ class AlphaVantageProvider(StockProvider):
             for item in data
             if item.get("1. symbol")
         ]
+
+    async def get_financials(self, symbol: str, years: int = 10) -> dict:
+        raise RuntimeError("Alpha Vantage financial statements endpoint not enabled in this implementation")

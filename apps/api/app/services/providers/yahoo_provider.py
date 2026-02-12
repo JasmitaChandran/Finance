@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 
 import yfinance as yf
 
@@ -9,6 +10,40 @@ from app.services.providers.base import StockProvider
 
 class YahooFinanceProvider(StockProvider):
     name = "yahoo"
+
+    INCOME_PRIORITIES = [
+        "Total Revenue",
+        "Cost Of Revenue",
+        "Gross Profit",
+        "Operating Income",
+        "EBIT",
+        "EBITDA",
+        "Pretax Income",
+        "Net Income",
+        "Basic EPS",
+        "Diluted EPS",
+    ]
+    BALANCE_PRIORITIES = [
+        "Total Assets",
+        "Current Assets",
+        "Cash And Cash Equivalents",
+        "Total Liabilities Net Minority Interest",
+        "Current Liabilities",
+        "Long Term Debt",
+        "Stockholders Equity",
+        "Working Capital",
+        "Tangible Book Value",
+        "Net Debt",
+    ]
+    CASHFLOW_PRIORITIES = [
+        "Operating Cash Flow",
+        "Investing Cash Flow",
+        "Financing Cash Flow",
+        "Free Cash Flow",
+        "Capital Expenditure",
+        "Net Income",
+        "Depreciation And Amortization",
+    ]
 
     async def get_quote(self, symbol: str) -> dict:
         ticker = yf.Ticker(symbol)
@@ -91,3 +126,184 @@ class YahooFinanceProvider(StockProvider):
             for item in quotes
             if item.get("symbol")
         ]
+
+    @staticmethod
+    def _norm_metric(name: str) -> str:
+        return "".join(ch for ch in name.lower() if ch.isalnum())
+
+    @staticmethod
+    def _to_number(value):
+        try:
+            numeric = float(value)
+            return numeric if math.isfinite(numeric) else None
+        except Exception:
+            return None
+
+    def _columns_to_years(self, df, years: int) -> list[tuple[str, object]]:
+        columns = list(df.columns)
+        columns_sorted = sorted(columns, key=lambda col: str(col), reverse=True)
+        pairs = []
+        seen_years = set()
+        for col in columns_sorted:
+            year = str(col)[:4]
+            if len(year) == 4 and year.isdigit() and year not in seen_years:
+                seen_years.add(year)
+                pairs.append((year, col))
+            if len(pairs) >= years:
+                break
+        return pairs
+
+    def _select_metrics(self, df, priorities: list[str], row_limit: int = 16) -> list[str]:
+        available = [str(index) for index in df.index]
+        available_map = {self._norm_metric(metric): metric for metric in available}
+        selected: list[str] = []
+
+        for metric in priorities:
+            found = available_map.get(self._norm_metric(metric))
+            if found and found not in selected:
+                selected.append(found)
+
+        for metric in available:
+            if metric not in selected:
+                selected.append(metric)
+            if len(selected) >= row_limit:
+                break
+
+        return selected[:row_limit]
+
+    def _statement_block(self, df, years: int, priorities: list[str], base_candidates: list[str]) -> dict:
+        if df is None or getattr(df, "empty", True):
+            return {"raw": [], "common_size": [], "base_metric": None}
+
+        year_pairs = self._columns_to_years(df, years)
+        if not year_pairs:
+            return {"raw": [], "common_size": [], "base_metric": None}
+
+        year_keys = [year for year, _ in year_pairs]
+        metrics = self._select_metrics(df, priorities=priorities)
+
+        raw_rows = []
+        for metric in metrics:
+            values = {}
+            has_data = False
+            for year, col in year_pairs:
+                val = self._to_number(df.at[metric, col]) if metric in df.index else None
+                values[year] = val
+                if val is not None:
+                    has_data = True
+
+            if not has_data:
+                continue
+
+            yoy_growth = {}
+            for idx, year in enumerate(year_keys):
+                if idx == len(year_keys) - 1:
+                    yoy_growth[year] = None
+                    continue
+                current = values.get(year)
+                previous = values.get(year_keys[idx + 1])
+                if current is None or previous is None or previous == 0:
+                    yoy_growth[year] = None
+                else:
+                    yoy_growth[year] = ((current - previous) / previous) * 100
+
+            available_for_cagr = [(int(year), values.get(year)) for year in year_keys if values.get(year) is not None]
+            cagr = None
+            if len(available_for_cagr) >= 2:
+                newest_year, newest_value = available_for_cagr[0]
+                oldest_year, oldest_value = available_for_cagr[-1]
+                periods = newest_year - oldest_year
+                if periods <= 0:
+                    periods = len(available_for_cagr) - 1
+                if periods > 0 and newest_value and oldest_value and newest_value > 0 and oldest_value > 0:
+                    cagr = ((newest_value / oldest_value) ** (1 / periods) - 1) * 100
+
+            raw_rows.append(
+                {
+                    "metric": metric,
+                    "values": values,
+                    "yoy_growth": yoy_growth,
+                    "cagr": cagr,
+                }
+            )
+
+        base_metric = None
+        norm_base_map = {self._norm_metric(candidate): candidate for candidate in base_candidates}
+        row_lookup = {self._norm_metric(row["metric"]): row for row in raw_rows}
+
+        for candidate_norm in norm_base_map:
+            if candidate_norm in row_lookup:
+                base_metric = row_lookup[candidate_norm]["metric"]
+                break
+        if not base_metric and raw_rows:
+            base_metric = raw_rows[0]["metric"]
+
+        common_size_rows = []
+        base_row = next((row for row in raw_rows if row["metric"] == base_metric), None)
+        if base_row:
+            for row in raw_rows:
+                cs_values = {}
+                for year in year_keys:
+                    value = row["values"].get(year)
+                    base_value = base_row["values"].get(year)
+                    if value is None or base_value in (None, 0):
+                        cs_values[year] = None
+                    else:
+                        cs_values[year] = (value / base_value) * 100
+
+                common_size_rows.append(
+                    {
+                        "metric": row["metric"],
+                        "values": cs_values,
+                        "yoy_growth": row["yoy_growth"],
+                        "cagr": row["cagr"],
+                    }
+                )
+
+        return {"raw": raw_rows, "common_size": common_size_rows, "base_metric": base_metric}
+
+    async def get_financials(self, symbol: str, years: int = 10) -> dict:
+        ticker = yf.Ticker(symbol)
+        income_df, balance_df, cashflow_df = await asyncio.gather(
+            asyncio.to_thread(lambda: ticker.income_stmt),
+            asyncio.to_thread(lambda: ticker.balance_sheet),
+            asyncio.to_thread(lambda: ticker.cashflow),
+        )
+
+        income_block = self._statement_block(
+            income_df,
+            years=years,
+            priorities=self.INCOME_PRIORITIES,
+            base_candidates=["Total Revenue", "Operating Revenue"],
+        )
+        balance_block = self._statement_block(
+            balance_df,
+            years=years,
+            priorities=self.BALANCE_PRIORITIES,
+            base_candidates=["Total Assets"],
+        )
+        cashflow_block = self._statement_block(
+            cashflow_df,
+            years=years,
+            priorities=self.CASHFLOW_PRIORITIES,
+            base_candidates=["Operating Cash Flow", "Net Cash Flow From Operating Activities"],
+        )
+
+        year_set = set()
+        for block in [income_block, balance_block, cashflow_block]:
+            rows = block.get("raw", [])
+            if rows:
+                for year in rows[0]["values"].keys():
+                    year_set.add(year)
+        years_out = sorted(year_set, reverse=True)
+
+        return {
+            "years": years_out[:years],
+            "income_statement": income_block,
+            "balance_sheet": balance_block,
+            "cash_flow": cashflow_block,
+            "meta": {
+                "requested_years": years,
+                "available_years": min(len(years_out), years),
+            },
+        }
