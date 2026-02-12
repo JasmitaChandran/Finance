@@ -17,7 +17,7 @@ const nav = [
 ];
 
 export function Header() {
-  const { mode, setMode, theme, setTheme, language, setLanguage } = useUI();
+  const { mode, setMode, theme, setTheme } = useUI();
   const { user, logout } = useAuth();
 
   return (
@@ -57,14 +57,6 @@ export function Header() {
             aria-label="Toggle theme"
           >
             {theme === "dark" ? <SunMedium className="h-4 w-4" /> : <MoonStar className="h-4 w-4" />}
-          </button>
-
-          <button
-            onClick={() => setLanguage(language === "en" ? "es" : "en")}
-            className="rounded-lg border border-borderGlass bg-card px-3 py-2 text-xs text-textMain transition hover:bg-cardHover"
-            aria-label="Toggle language"
-          >
-            {language.toUpperCase()}
           </button>
 
           {user ? (
