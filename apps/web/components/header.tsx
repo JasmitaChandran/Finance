@@ -22,7 +22,7 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-50 border-b border-borderGlass bg-bg/80 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-4 md:px-8">
+      <div className="mx-auto flex w-full min-w-max items-center justify-between gap-4 overflow-x-auto px-4 py-4 md:px-8">
         <Link href="/" className="flex items-center gap-3">
           <div className="rounded-xl border border-borderGlass bg-card p-2 shadow-glow">
             <LineChart className="h-5 w-5 text-accent" />
@@ -33,7 +33,7 @@ export function Header() {
           </div>
         </Link>
 
-        <nav className="flex flex-wrap gap-2 text-sm">
+        <nav className="flex items-center gap-2 whitespace-nowrap text-sm">
           {nav.map((item) => (
             <Link key={item.href} href={item.href} className="rounded-lg px-3 py-2 text-textMuted transition hover:bg-card hover:text-textMain">
               {item.label}
@@ -41,7 +41,7 @@ export function Header() {
           ))}
         </nav>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2 whitespace-nowrap">
           <button
             onClick={() => setMode(mode === "beginner" ? "pro" : "beginner")}
             className="rounded-lg border border-borderGlass bg-card px-3 py-2 text-xs text-textMain transition hover:bg-cardHover"
