@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -10,6 +11,7 @@ from app.core.cache import cache
 from app.services.providers.alpha_vantage_provider import AlphaVantageProvider
 from app.services.providers.fmp_provider import FMPProvider
 from app.services.providers.yahoo_provider import YahooFinanceProvider
+from app.services.universe_service import universe_service
 
 
 class StockService:
@@ -27,6 +29,86 @@ class StockService:
         "basicmaterials": ["LIN", "APD", "NEM", "FCX", "ECL", "SHW", "NUE", "DOW"],
     }
     FALLBACK_PEERS = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "JPM", "V", "WMT", "XOM"]
+    MARKET_HEATMAP_SYMBOLS = [
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "AMZN",
+        "GOOGL",
+        "META",
+        "TSLA",
+        "BRK-B",
+        "JPM",
+        "V",
+        "WMT",
+        "XOM",
+        "LLY",
+        "AVGO",
+        "MA",
+        "UNH",
+        "JNJ",
+        "PG",
+        "COST",
+        "HD",
+        "MRK",
+        "ABBV",
+        "PEP",
+        "KO",
+        "CVX",
+        "BAC",
+        "WFC",
+        "ADBE",
+        "CRM",
+        "NFLX",
+        "ORCL",
+        "AMD",
+        "QCOM",
+        "INTC",
+        "CSCO",
+        "IBM",
+        "TXN",
+        "AMAT",
+        "GE",
+        "CAT",
+        "RTX",
+        "LMT",
+        "NKE",
+        "MCD",
+        "SBUX",
+        "LOW",
+        "PM",
+        "COP",
+        "PFE",
+        "DHR",
+        "ABT",
+        "SPGI",
+        "BLK",
+        "GS",
+        "MS",
+        "C",
+        "T",
+        "VZ",
+        "DIS",
+        "UBER",
+        "SHOP",
+        "NOW",
+        "PLTR",
+        "PANW",
+        "MU",
+        "SNPS",
+        "AMGN",
+        "ISRG",
+        "GILD",
+        "BKNG",
+        "ADI",
+        "MDLZ",
+        "DE",
+        "ETN",
+        "NEE",
+        "SO",
+        "DUK",
+        "AEP",
+    ]
 
     def __init__(self) -> None:
         self.providers = [YahooFinanceProvider(), FMPProvider(), AlphaVantageProvider()]
@@ -1067,6 +1149,121 @@ class StockService:
             "valuation_engine": valuation_engine,
         }
         return self._sanitize_json(dashboard)
+
+    async def _build_market_heatmap(self, limit: int) -> dict:
+        def valid_symbol(raw: str) -> bool:
+            symbol = raw.strip().upper()
+            if not symbol or len(symbol) > 10:
+                return False
+            if not symbol[0].isalpha():
+                return False
+            return all(ch.isalnum() or ch in ".-" for ch in symbol)
+
+        symbols: list[str] = []
+        seen: set[str] = set()
+
+        for symbol in self.MARKET_HEATMAP_SYMBOLS:
+            upper = symbol.upper()
+            if not valid_symbol(upper):
+                continue
+            if upper not in seen:
+                seen.add(upper)
+                symbols.append(upper)
+
+        if len(symbols) < limit:
+            try:
+                universe = await universe_service.list_stocks(query="", offset=0, limit=min(600, limit * 8))
+                for item in universe.get("items", []):
+                    symbol = str(item.get("symbol") or "").upper()
+                    if not valid_symbol(symbol):
+                        continue
+                    if symbol and symbol not in seen:
+                        seen.add(symbol)
+                        symbols.append(symbol)
+                    if len(symbols) >= limit + 60:
+                        break
+            except Exception:
+                pass
+
+        candidate_symbols = symbols[: max(limit + 40, 80)]
+        semaphore = asyncio.Semaphore(8)
+
+        async def fetch(symbol: str):
+            async with semaphore:
+                try:
+                    quote = await self.quote(symbol)
+                except Exception:
+                    return None
+
+                market_cap = self._as_number(quote.get("market_cap"))
+                change_percent = self._as_number(quote.get("change_percent"))
+                price = self._as_number(quote.get("price"))
+
+                if market_cap is None and price is None:
+                    return None
+
+                return {
+                    "symbol": quote.get("symbol") or symbol,
+                    "name": quote.get("name") or symbol,
+                    "price": price,
+                    "change_percent": change_percent,
+                    "market_cap": market_cap,
+                    "volume": self._as_number(quote.get("volume")),
+                }
+
+        rows = await asyncio.gather(*(fetch(symbol) for symbol in candidate_symbols))
+        items = [row for row in rows if row]
+        if not items:
+            return self._market_heatmap_fallback(limit)
+
+        items.sort(key=lambda item: item.get("market_cap") or 0.0, reverse=True)
+        selected = items[:limit]
+
+        advancers = sum(1 for item in selected if (item.get("change_percent") or 0) > 0)
+        decliners = sum(1 for item in selected if (item.get("change_percent") or 0) < 0)
+        unchanged = max(0, len(selected) - advancers - decliners)
+
+        return {
+            "as_of": datetime.now(timezone.utc).isoformat(),
+            "items": selected,
+            "stats": {
+                "advancers": advancers,
+                "decliners": decliners,
+                "unchanged": unchanged,
+            },
+        }
+
+    def _market_heatmap_fallback(self, limit: int) -> dict:
+        selected_symbols = self.MARKET_HEATMAP_SYMBOLS[: max(20, min(limit, len(self.MARKET_HEATMAP_SYMBOLS)))]
+        items = [
+            {
+                "symbol": symbol,
+                "name": symbol,
+                "price": None,
+                "change_percent": None,
+                "market_cap": None,
+                "volume": None,
+            }
+            for symbol in selected_symbols
+        ]
+        return {
+            "as_of": datetime.now(timezone.utc).isoformat(),
+            "items": items,
+            "stats": {
+                "advancers": 0,
+                "decliners": 0,
+                "unchanged": len(items),
+            },
+        }
+
+    async def market_heatmap(self, limit: int = 60) -> dict:
+        safe_limit = max(20, min(200, limit))
+        key = f"market-heatmap:{safe_limit}"
+        try:
+            data = await cache.remember(key, lambda: self._build_market_heatmap(safe_limit), ttl_seconds=600)
+        except Exception:
+            data = self._market_heatmap_fallback(safe_limit)
+        return self._sanitize_json(data)
 
 
 stock_service = StockService()

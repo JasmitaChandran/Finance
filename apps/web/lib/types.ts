@@ -276,6 +276,23 @@ export interface SmartInsightsData {
   };
 }
 
+export interface MarketHeatmapData {
+  as_of: string;
+  items: Array<{
+    symbol: string;
+    name?: string;
+    price?: number | null;
+    change_percent?: number | null;
+    market_cap?: number | null;
+    volume?: number | null;
+  }>;
+  stats: {
+    advancers: number;
+    decliners: number;
+    unchanged: number;
+  };
+}
+
 export interface StockDashboard {
   quote: StockQuote;
   profile: StockProfile;

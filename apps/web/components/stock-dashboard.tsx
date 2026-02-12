@@ -12,6 +12,7 @@ import { SmartInsightsPanel } from "@/components/smart-insights-panel";
 import { TechnicalAnalysisPanel } from "@/components/technical-analysis-panel";
 import { useUI } from "@/components/providers";
 import { ValuationEnginePanel } from "@/components/valuation-engine-panel";
+import { VisualizationToolsPanel } from "@/components/visualization-tools-panel";
 import { api } from "@/lib/api";
 import { formatCurrency, formatLarge, ratioToPercent } from "@/lib/format";
 import type { NewsSummary, StockDashboard as StockDashboardType, StockSummary } from "@/lib/types";
@@ -381,6 +382,13 @@ export function StockDashboard() {
   const technicalAnalysisSection = (
     <TechnicalAnalysisPanel symbol={dashboard?.quote.symbol || "AAPL"} currency={dashboard?.quote.currency} initialHistory={dashboard?.history || []} />
   );
+  const visualizationToolsSection = (
+    <VisualizationToolsPanel
+      symbol={dashboard?.quote.symbol || "AAPL"}
+      currency={dashboard?.quote.currency}
+      financials={dashboard?.financial_statements}
+    />
+  );
   const smartInsightsSection = <SmartInsightsPanel symbol={dashboard?.quote.symbol || "AAPL"} currency={dashboard?.quote.currency} />;
 
   if (error) {
@@ -646,6 +654,7 @@ export function StockDashboard() {
           {ratioDashboardSection}
           {valuationEngineSection}
           {technicalAnalysisSection}
+          {visualizationToolsSection}
           {smartInsightsSection}
         </>
       )}
@@ -784,6 +793,7 @@ export function StockDashboard() {
           {ratioDashboardSection}
           {valuationEngineSection}
           {technicalAnalysisSection}
+          {visualizationToolsSection}
           {smartInsightsSection}
         </>
       )}

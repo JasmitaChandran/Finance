@@ -25,6 +25,11 @@ async def stock_universe(
     return await universe_service.list_stocks(query=q, offset=offset, limit=limit)
 
 
+@router.get("/market-heatmap")
+async def market_heatmap(limit: int = Query(default=60, ge=20, le=200)):
+    return await stock_service.market_heatmap(limit=limit)
+
+
 @router.get("/{symbol}/quote")
 async def quote(symbol: str):
     return await stock_service.quote(symbol)

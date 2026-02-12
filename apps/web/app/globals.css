@@ -60,3 +60,15 @@ a {
   color: inherit;
   text-decoration: none;
 }
+
+.recharts-default-tooltip {
+  border: 1px solid var(--border-glass) !important;
+  background: var(--card) !important;
+  color: var(--text-main) !important;
+}
+
+.recharts-default-tooltip .recharts-tooltip-label,
+.recharts-default-tooltip .recharts-tooltip-item,
+.recharts-tooltip-item-list .recharts-tooltip-item {
+  color: var(--text-main) !important;
+}
