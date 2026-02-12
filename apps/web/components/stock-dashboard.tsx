@@ -9,6 +9,7 @@ import { MetricChip } from "@/components/metric-chip";
 import { PriceChart } from "@/components/price-chart";
 import { RatioDashboardPanel } from "@/components/ratio-dashboard-panel";
 import { useUI } from "@/components/providers";
+import { ValuationEnginePanel } from "@/components/valuation-engine-panel";
 import { api } from "@/lib/api";
 import { formatCurrency, formatLarge, ratioToPercent } from "@/lib/format";
 import type { NewsSummary, StockDashboard as StockDashboardType, StockSummary } from "@/lib/types";
@@ -374,6 +375,7 @@ export function StockDashboard() {
   );
   const financialStatementsSection = <FinancialStatementsPanel data={dashboard?.financial_statements} />;
   const ratioDashboardSection = <RatioDashboardPanel data={dashboard?.ratio_dashboard} />;
+  const valuationEngineSection = <ValuationEnginePanel data={dashboard?.valuation_engine} />;
 
   if (error) {
     return (
@@ -636,6 +638,7 @@ export function StockDashboard() {
           {ohlcSection}
           {financialStatementsSection}
           {ratioDashboardSection}
+          {valuationEngineSection}
         </>
       )}
 
@@ -771,6 +774,7 @@ export function StockDashboard() {
           {ohlcSection}
           {financialStatementsSection}
           {ratioDashboardSection}
+          {valuationEngineSection}
         </>
       )}
     </section>

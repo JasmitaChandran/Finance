@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 from typing import Any
 
@@ -12,6 +13,21 @@ from app.services.providers.yahoo_provider import YahooFinanceProvider
 
 
 class StockService:
+    SECTOR_PEERS = {
+        "technology": ["MSFT", "NVDA", "GOOGL", "META", "ORCL", "CRM", "ADBE", "INTC"],
+        "communicationservices": ["GOOGL", "META", "NFLX", "DIS", "TMUS", "VZ", "T", "CHTR"],
+        "consumercyclical": ["AMZN", "TSLA", "HD", "MCD", "NKE", "BKNG", "SBUX", "LOW"],
+        "consumerdefensive": ["WMT", "COST", "PG", "KO", "PEP", "PM", "CL", "MDLZ"],
+        "healthcare": ["UNH", "JNJ", "LLY", "PFE", "MRK", "ABT", "TMO", "DHR"],
+        "financialservices": ["JPM", "BAC", "WFC", "MS", "GS", "V", "MA", "AXP"],
+        "industrials": ["GE", "CAT", "HON", "UPS", "BA", "DE", "LMT", "RTX"],
+        "energy": ["XOM", "CVX", "COP", "SLB", "EOG", "MPC", "PSX", "OXY"],
+        "realestate": ["AMT", "PLD", "CCI", "EQIX", "SPG", "O", "WELL", "DLR"],
+        "utilities": ["NEE", "SO", "DUK", "AEP", "D", "XEL", "SRE", "EXC"],
+        "basicmaterials": ["LIN", "APD", "NEM", "FCX", "ECL", "SHW", "NUE", "DOW"],
+    }
+    FALLBACK_PEERS = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "JPM", "V", "WMT", "XOM"]
+
     def __init__(self) -> None:
         self.providers = [YahooFinanceProvider(), FMPProvider(), AlphaVantageProvider()]
 
@@ -183,6 +199,21 @@ class StockService:
                 cash_rows,
                 year,
                 ["Operating Cash Flow", "Net Cash Provided By Operating Activities", "Net Cash Flow From Operating Activities", "Cash Flow From Operations"],
+            ),
+            "free_cash_flow": self._statement_value(
+                cash_rows,
+                year,
+                ["Free Cash Flow", "FreeCashFlow"],
+            ),
+            "capital_expenditure": self._statement_value(
+                cash_rows,
+                year,
+                ["Capital Expenditure", "Capital Expenditures", "Purchase Of PPE", "Purchase Of Property Plant And Equipment"],
+            ),
+            "depreciation_amortization": self._statement_value(
+                cash_rows,
+                year,
+                ["Depreciation And Amortization", "Depreciation Amortization Depletion", "Depreciation"],
             ),
         }
 
@@ -383,6 +414,513 @@ class StockService:
             },
         }
 
+    @staticmethod
+    def _clamp(value: float, low: float, high: float) -> float:
+        return max(low, min(high, value))
+
+    def _median(self, values: list[float | int | None]) -> float | None:
+        nums = []
+        for item in values:
+            numeric = self._as_number(item)
+            if numeric is not None:
+                nums.append(numeric)
+        if not nums:
+            return None
+        nums.sort()
+        mid = len(nums) // 2
+        if len(nums) % 2 == 1:
+            return nums[mid]
+        return (nums[mid - 1] + nums[mid]) / 2
+
+    def _sector_key(self, profile: dict) -> str:
+        sector = profile.get("sector") or profile.get("industry") or ""
+        return self._norm_metric(sector)
+
+    def _select_peer_symbols(self, symbol: str, profile: dict) -> list[str]:
+        key = self._sector_key(profile)
+        peers = self.SECTOR_PEERS.get(key, self.FALLBACK_PEERS)
+        dedup: list[str] = []
+        upper_symbol = symbol.upper()
+        for peer in peers:
+            candidate = peer.upper()
+            if candidate == upper_symbol:
+                continue
+            if candidate not in dedup:
+                dedup.append(candidate)
+        return dedup[:8]
+
+    def _project_dcf(
+        self,
+        base_cash_flow: float | None,
+        growth_rate: float,
+        discount_rate: float,
+        terminal_growth_rate: float,
+        projection_years: int,
+        shares_outstanding: float | None,
+        net_debt: float | None,
+        market_price: float | None,
+        mode: str,
+    ) -> dict:
+        if base_cash_flow is None or shares_outstanding is None or shares_outstanding <= 0:
+            return {
+                "projection": [],
+                "present_value_of_cash_flows": None,
+                "terminal_value": None,
+                "enterprise_value": None,
+                "equity_value": None,
+                "intrinsic_value_per_share": None,
+                "upside_percent": None,
+            }
+
+        discount = self._as_number(discount_rate)
+        growth = self._as_number(growth_rate)
+        terminal_growth = self._as_number(terminal_growth_rate)
+        if (
+            discount is None
+            or growth is None
+            or terminal_growth is None
+            or discount <= -0.9
+            or terminal_growth <= -0.9
+            or discount <= terminal_growth + 0.002
+            or base_cash_flow <= 0
+        ):
+            return {
+                "projection": [],
+                "present_value_of_cash_flows": None,
+                "terminal_value": None,
+                "enterprise_value": None,
+                "equity_value": None,
+                "intrinsic_value_per_share": None,
+                "upside_percent": None,
+            }
+
+        pv_cash_flows = 0.0
+        projection = []
+        last_cash_flow = base_cash_flow
+
+        for year_index in range(1, projection_years + 1):
+            projected = base_cash_flow * ((1 + growth) ** year_index)
+            discount_factor = (1 + discount) ** year_index
+            pv = projected / discount_factor
+            projection.append(
+                {
+                    "year_index": year_index,
+                    "cash_flow": projected,
+                    "present_value": pv,
+                }
+            )
+            pv_cash_flows += pv
+            last_cash_flow = projected
+
+        terminal_cash_flow = last_cash_flow * (1 + terminal_growth)
+        terminal_value = terminal_cash_flow / (discount - terminal_growth)
+        present_value_terminal = terminal_value / ((1 + discount) ** projection_years)
+
+        if mode == "fcff":
+            enterprise_value = pv_cash_flows + present_value_terminal
+            equity_value = enterprise_value - (net_debt or 0.0)
+        else:
+            equity_value = pv_cash_flows + present_value_terminal
+            enterprise_value = equity_value + (net_debt or 0.0)
+
+        intrinsic = self._safe_div(equity_value, shares_outstanding)
+        upside = None
+        if intrinsic is not None and market_price is not None and market_price > 0:
+            upside = ((intrinsic - market_price) / market_price) * 100
+
+        return {
+            "projection": projection,
+            "present_value_of_cash_flows": pv_cash_flows,
+            "terminal_value": terminal_value,
+            "present_value_terminal": present_value_terminal,
+            "enterprise_value": enterprise_value,
+            "equity_value": equity_value,
+            "intrinsic_value_per_share": intrinsic,
+            "upside_percent": upside,
+        }
+
+    def _reverse_dcf_growth(
+        self,
+        base_cash_flow: float | None,
+        discount_rate: float,
+        terminal_growth_rate: float,
+        projection_years: int,
+        shares_outstanding: float | None,
+        net_debt: float | None,
+        market_price: float | None,
+        mode: str,
+    ) -> float | None:
+        if (
+            base_cash_flow is None
+            or base_cash_flow <= 0
+            or shares_outstanding is None
+            or shares_outstanding <= 0
+            or market_price is None
+            or market_price <= 0
+        ):
+            return None
+
+        low, high = -0.30, 0.45
+        for _ in range(70):
+            mid = (low + high) / 2
+            result = self._project_dcf(
+                base_cash_flow=base_cash_flow,
+                growth_rate=mid,
+                discount_rate=discount_rate,
+                terminal_growth_rate=terminal_growth_rate,
+                projection_years=projection_years,
+                shares_outstanding=shares_outstanding,
+                net_debt=net_debt,
+                market_price=market_price,
+                mode=mode,
+            )
+            price = self._as_number(result.get("intrinsic_value_per_share"))
+            if price is None:
+                return None
+            if price > market_price:
+                high = mid
+            else:
+                low = mid
+        return (low + high) / 2
+
+    def _sensitivity_grid(
+        self,
+        base_cash_flow: float | None,
+        growth_rate: float,
+        discount_rate: float,
+        terminal_growth_rate: float,
+        projection_years: int,
+        shares_outstanding: float | None,
+        net_debt: float | None,
+        market_price: float | None,
+        mode: str,
+    ) -> dict:
+        wacc_points = []
+        for delta in [-0.02, -0.01, 0.0, 0.01, 0.02]:
+            candidate = self._clamp(discount_rate + delta, 0.05, 0.25)
+            if candidate > terminal_growth_rate + 0.002 and candidate not in wacc_points:
+                wacc_points.append(candidate)
+        if not wacc_points:
+            wacc_points = [max(discount_rate, terminal_growth_rate + 0.01)]
+
+        growth_points = []
+        for delta in [-0.02, -0.01, 0.0, 0.01, 0.02]:
+            candidate = self._clamp(growth_rate + delta, -0.15, 0.25)
+            if candidate not in growth_points:
+                growth_points.append(candidate)
+        growth_points.sort(reverse=True)
+
+        rows = []
+        for growth in growth_points:
+            row_cells = []
+            for wacc in sorted(wacc_points):
+                result = self._project_dcf(
+                    base_cash_flow=base_cash_flow,
+                    growth_rate=growth,
+                    discount_rate=wacc,
+                    terminal_growth_rate=terminal_growth_rate,
+                    projection_years=projection_years,
+                    shares_outstanding=shares_outstanding,
+                    net_debt=net_debt,
+                    market_price=market_price,
+                    mode=mode,
+                )
+                row_cells.append(
+                    {
+                        "wacc": wacc,
+                        "intrinsic_value_per_share": result.get("intrinsic_value_per_share"),
+                        "upside_percent": result.get("upside_percent"),
+                    }
+                )
+            rows.append({"growth": growth, "values": row_cells})
+
+        return {"wacc_values": sorted(wacc_points), "growth_values": growth_points, "rows": rows}
+
+    async def _peer_snapshot(self, symbol: str, profile: dict, market_price: float | None) -> dict:
+        peer_symbols = self._select_peer_symbols(symbol, profile)
+
+        async def _load_peer(peer_symbol: str):
+            try:
+                quote, peer_profile = await asyncio.gather(self.quote(peer_symbol), self.profile(peer_symbol))
+            except Exception:
+                return None
+
+            pe = self._as_number(peer_profile.get("trailing_pe"))
+            pb = self._as_number(peer_profile.get("pb"))
+            peg = self._as_number(peer_profile.get("peg"))
+            if pe is None and pb is None and peg is None:
+                return None
+
+            return {
+                "symbol": peer_symbol,
+                "name": peer_profile.get("name") or quote.get("name") or peer_symbol,
+                "sector": peer_profile.get("sector"),
+                "industry": peer_profile.get("industry"),
+                "price": self._as_number(quote.get("price")),
+                "market_cap": self._as_number(quote.get("market_cap")),
+                "pe": pe,
+                "pb": pb,
+                "peg": peg,
+            }
+
+        peer_results = await asyncio.gather(*[_load_peer(peer_symbol) for peer_symbol in peer_symbols])
+        peers = [peer for peer in peer_results if isinstance(peer, dict)]
+
+        peer_medians = {
+            "pe": self._median([peer.get("pe") for peer in peers]),
+            "pb": self._median([peer.get("pb") for peer in peers]),
+            "peg": self._median([peer.get("peg") for peer in peers]),
+        }
+
+        company_metrics = {
+            "pe": self._as_number(profile.get("trailing_pe")),
+            "pb": self._as_number(profile.get("pb")),
+            "peg": self._as_number(profile.get("peg")),
+        }
+
+        premium_discount = {}
+        for metric in ["pe", "pb", "peg"]:
+            company_value = company_metrics.get(metric)
+            industry_value = peer_medians.get(metric)
+            if company_value is None or industry_value in (None, 0):
+                premium_discount[metric] = None
+            else:
+                premium_discount[metric] = ((company_value - industry_value) / industry_value) * 100
+
+        eps = self._as_number(profile.get("eps"))
+        book_value = self._as_number(profile.get("book_value"))
+        revenue_growth = self._normalize_rate(profile.get("revenue_growth"))
+        growth_percent = revenue_growth * 100 if revenue_growth is not None else None
+
+        pe_implied_price = None
+        if eps is not None and eps > 0 and peer_medians["pe"] is not None:
+            pe_implied_price = eps * peer_medians["pe"]
+
+        pb_implied_price = None
+        if book_value is not None and book_value > 0 and peer_medians["pb"] is not None:
+            pb_implied_price = book_value * peer_medians["pb"]
+
+        peg_implied_price = None
+        if (
+            eps is not None
+            and eps > 0
+            and growth_percent is not None
+            and growth_percent > 0
+            and peer_medians["peg"] is not None
+        ):
+            implied_pe = peer_medians["peg"] * growth_percent
+            peg_implied_price = eps * implied_pe
+
+        implied_prices = [price for price in [pe_implied_price, pb_implied_price, peg_implied_price] if price is not None]
+        composite_fair_price = sum(implied_prices) / len(implied_prices) if implied_prices else None
+        composite_upside = None
+        if composite_fair_price is not None and market_price is not None and market_price > 0:
+            composite_upside = ((composite_fair_price - market_price) / market_price) * 100
+
+        return {
+            "peers": peers,
+            "peer_medians": peer_medians,
+            "company_multiples": company_metrics,
+            "implied_prices": {
+                "pe_based_price": pe_implied_price,
+                "pb_based_price": pb_implied_price,
+                "peg_based_price": peg_implied_price,
+                "composite_fair_price": composite_fair_price,
+                "composite_upside_percent": composite_upside,
+            },
+            "industry_multiple_comparison": {
+                "company": company_metrics,
+                "industry_median": peer_medians,
+                "premium_discount_percent": premium_discount,
+            },
+        }
+
+    async def _build_valuation_engine(self, symbol: str, quote: dict, profile: dict, financial_statements: dict[str, Any]) -> dict:
+        years_raw = financial_statements.get("years", []) if isinstance(financial_statements, dict) else []
+        years = [str(year) for year in years_raw if year is not None]
+        latest_year = years[0] if years else None
+        latest = self._extract_statement_values(financial_statements, latest_year)
+
+        market_price = self._as_number(quote.get("price"))
+        market_cap = self._as_number(quote.get("market_cap"))
+        shares_outstanding = self._as_number(latest.get("shares_outstanding"))
+        if (shares_outstanding is None or shares_outstanding <= 0) and market_price and market_cap and market_price > 0:
+            shares_outstanding = market_cap / market_price
+
+        long_term_debt = self._as_number(latest.get("long_term_debt"))
+        cash_and_equivalents = self._as_number(latest.get("cash_and_equivalents"))
+        net_debt = None
+        if long_term_debt is not None and cash_and_equivalents is not None:
+            net_debt = long_term_debt - cash_and_equivalents
+        elif long_term_debt is not None:
+            net_debt = long_term_debt
+        elif cash_and_equivalents is not None:
+            net_debt = -cash_and_equivalents
+
+        tax_rate = 0.21
+        revenue_growth = self._normalize_rate(profile.get("revenue_growth"))
+        if revenue_growth is None:
+            revenue_growth = 0.05
+        growth_rate = self._clamp(revenue_growth, -0.05, 0.20)
+
+        beta = self._as_number(profile.get("beta"))
+        if beta is None or beta <= 0:
+            beta = 1.0
+        risk_free_rate = 0.043
+        market_risk_premium = 0.055
+        cost_of_equity = risk_free_rate + beta * market_risk_premium
+
+        debt_to_equity = self._as_number(profile.get("debt_to_equity"))
+        if debt_to_equity is not None and abs(debt_to_equity) > 10:
+            debt_to_equity = debt_to_equity / 100
+        if debt_to_equity is None or debt_to_equity < 0:
+            debt_to_equity = 0.4
+        debt_weight = debt_to_equity / (1 + debt_to_equity)
+        cost_of_debt = 0.05
+        wacc = cost_of_equity * (1 - debt_weight) + cost_of_debt * (1 - tax_rate) * debt_weight
+        wacc = self._clamp(wacc, 0.06, 0.18)
+
+        terminal_growth_rate = self._clamp(max(0.015, growth_rate * 0.45), 0.01, 0.04)
+        projection_years = 5
+
+        operating_cash_flow = self._as_number(latest.get("operating_cash_flow"))
+        free_cash_flow = self._as_number(latest.get("free_cash_flow"))
+        capex = self._as_number(latest.get("capital_expenditure"))
+        depreciation_amortization = self._as_number(latest.get("depreciation_amortization")) or 0.0
+        ebit = self._as_number(latest.get("ebit"))
+        interest_expense = self._as_number(latest.get("interest_expense"))
+
+        fcfe_base = free_cash_flow
+        if fcfe_base is None and operating_cash_flow is not None:
+            if capex is None:
+                fcfe_base = operating_cash_flow
+            else:
+                fcfe_base = operating_cash_flow - abs(capex)
+
+        fcff_base = None
+        if operating_cash_flow is not None:
+            if capex is None:
+                fcff_base = operating_cash_flow
+            else:
+                fcff_base = operating_cash_flow - abs(capex)
+        elif free_cash_flow is not None:
+            fcff_base = free_cash_flow
+        elif ebit is not None:
+            capex_spend = abs(capex) if capex is not None else 0.0
+            fcff_base = ebit * (1 - tax_rate) + depreciation_amortization - capex_spend
+
+        if fcff_base is not None and interest_expense is not None:
+            fcff_base = fcff_base + abs(interest_expense) * (1 - tax_rate)
+        if fcfe_base is None:
+            fcfe_base = fcff_base
+
+        fcff_default = self._project_dcf(
+            base_cash_flow=fcff_base,
+            growth_rate=growth_rate,
+            discount_rate=wacc,
+            terminal_growth_rate=terminal_growth_rate,
+            projection_years=projection_years,
+            shares_outstanding=shares_outstanding,
+            net_debt=net_debt,
+            market_price=market_price,
+            mode="fcff",
+        )
+        fcfe_default = self._project_dcf(
+            base_cash_flow=fcfe_base,
+            growth_rate=growth_rate,
+            discount_rate=wacc,
+            terminal_growth_rate=terminal_growth_rate,
+            projection_years=projection_years,
+            shares_outstanding=shares_outstanding,
+            net_debt=net_debt,
+            market_price=market_price,
+            mode="fcfe",
+        )
+
+        reverse_fcff = self._reverse_dcf_growth(
+            base_cash_flow=fcff_base,
+            discount_rate=wacc,
+            terminal_growth_rate=terminal_growth_rate,
+            projection_years=projection_years,
+            shares_outstanding=shares_outstanding,
+            net_debt=net_debt,
+            market_price=market_price,
+            mode="fcff",
+        )
+        reverse_fcfe = self._reverse_dcf_growth(
+            base_cash_flow=fcfe_base,
+            discount_rate=wacc,
+            terminal_growth_rate=terminal_growth_rate,
+            projection_years=projection_years,
+            shares_outstanding=shares_outstanding,
+            net_debt=net_debt,
+            market_price=market_price,
+            mode="fcfe",
+        )
+
+        sensitivity = {
+            "fcff": self._sensitivity_grid(
+                base_cash_flow=fcff_base,
+                growth_rate=growth_rate,
+                discount_rate=wacc,
+                terminal_growth_rate=terminal_growth_rate,
+                projection_years=projection_years,
+                shares_outstanding=shares_outstanding,
+                net_debt=net_debt,
+                market_price=market_price,
+                mode="fcff",
+            ),
+            "fcfe": self._sensitivity_grid(
+                base_cash_flow=fcfe_base,
+                growth_rate=growth_rate,
+                discount_rate=wacc,
+                terminal_growth_rate=terminal_growth_rate,
+                projection_years=projection_years,
+                shares_outstanding=shares_outstanding,
+                net_debt=net_debt,
+                market_price=market_price,
+                mode="fcfe",
+            ),
+        }
+
+        peer_cache_key = f"valuation:peers:{symbol.upper()}:{self._sector_key(profile) or 'general'}"
+        relative_valuation = await cache.remember(
+            peer_cache_key,
+            lambda: self._peer_snapshot(symbol, profile, market_price),
+            ttl_seconds=3600,
+        )
+
+        return {
+            "inputs": {
+                "symbol": symbol.upper(),
+                "base_year": latest_year,
+                "currency": quote.get("currency") or "USD",
+                "market_price": market_price,
+                "market_cap": market_cap,
+                "shares_outstanding": shares_outstanding,
+                "net_debt": net_debt,
+                "fcff_base": fcff_base,
+                "fcfe_base": fcfe_base,
+                "growth_rate": growth_rate,
+                "terminal_growth_rate": terminal_growth_rate,
+                "wacc": wacc,
+                "cost_of_equity": cost_of_equity,
+                "cost_of_debt": cost_of_debt,
+                "tax_rate": tax_rate,
+                "projection_years": projection_years,
+            },
+            "dcf": {
+                "fcff": fcff_default,
+                "fcfe": fcfe_default,
+            },
+            "reverse_dcf": {
+                "fcff_required_growth_rate": reverse_fcff,
+                "fcfe_required_growth_rate": reverse_fcfe,
+            },
+            "sensitivity": sensitivity,
+            "relative_valuation": relative_valuation,
+        }
+
     async def _from_providers(self, method_name: str, *args, **kwargs):
         last_error = None
         for provider in self.providers:
@@ -506,6 +1044,7 @@ class StockService:
             "roce": self._as_number(profile.get("roce")),
         }
         ratio_dashboard = self._build_ratio_dashboard(quote, profile, financial_statements)
+        valuation_engine = await self._build_valuation_engine(symbol, quote, profile, financial_statements)
 
         dashboard = {
             "quote": quote,
@@ -517,6 +1056,7 @@ class StockService:
             "ohlc": ohlc,
             "financial_statements": financial_statements,
             "ratio_dashboard": ratio_dashboard,
+            "valuation_engine": valuation_engine,
         }
         return self._sanitize_json(dashboard)
 

@@ -74,6 +74,120 @@ export interface RatioDashboardData {
   };
 }
 
+export interface ValuationProjectionPoint {
+  year_index: number;
+  cash_flow?: number | null;
+  present_value?: number | null;
+}
+
+export interface DCFResult {
+  projection: ValuationProjectionPoint[];
+  present_value_of_cash_flows?: number | null;
+  terminal_value?: number | null;
+  present_value_terminal?: number | null;
+  enterprise_value?: number | null;
+  equity_value?: number | null;
+  intrinsic_value_per_share?: number | null;
+  upside_percent?: number | null;
+}
+
+export interface ValuationSensitivityRow {
+  growth: number;
+  values: Array<{
+    wacc: number;
+    intrinsic_value_per_share?: number | null;
+    upside_percent?: number | null;
+  }>;
+}
+
+export interface ValuationSensitivityGrid {
+  wacc_values: number[];
+  growth_values: number[];
+  rows: ValuationSensitivityRow[];
+}
+
+export interface RelativeValuationData {
+  peers: Array<{
+    symbol: string;
+    name: string;
+    sector?: string | null;
+    industry?: string | null;
+    price?: number | null;
+    market_cap?: number | null;
+    pe?: number | null;
+    pb?: number | null;
+    peg?: number | null;
+  }>;
+  peer_medians: {
+    pe?: number | null;
+    pb?: number | null;
+    peg?: number | null;
+  };
+  company_multiples: {
+    pe?: number | null;
+    pb?: number | null;
+    peg?: number | null;
+  };
+  implied_prices: {
+    pe_based_price?: number | null;
+    pb_based_price?: number | null;
+    peg_based_price?: number | null;
+    composite_fair_price?: number | null;
+    composite_upside_percent?: number | null;
+  };
+  industry_multiple_comparison: {
+    company: {
+      pe?: number | null;
+      pb?: number | null;
+      peg?: number | null;
+    };
+    industry_median: {
+      pe?: number | null;
+      pb?: number | null;
+      peg?: number | null;
+    };
+    premium_discount_percent: {
+      pe?: number | null;
+      pb?: number | null;
+      peg?: number | null;
+    };
+  };
+}
+
+export interface ValuationEngineData {
+  inputs: {
+    symbol: string;
+    base_year?: string | null;
+    currency?: string | null;
+    market_price?: number | null;
+    market_cap?: number | null;
+    shares_outstanding?: number | null;
+    net_debt?: number | null;
+    fcff_base?: number | null;
+    fcfe_base?: number | null;
+    growth_rate: number;
+    terminal_growth_rate: number;
+    wacc: number;
+    cost_of_equity: number;
+    cost_of_debt: number;
+    tax_rate: number;
+    projection_years: number;
+  };
+  dcf: {
+    fcff: DCFResult;
+    fcfe: DCFResult;
+  };
+  reverse_dcf: {
+    fcff_required_growth_rate?: number | null;
+    fcfe_required_growth_rate?: number | null;
+  };
+  sensitivity: {
+    fcff: ValuationSensitivityGrid;
+    fcfe: ValuationSensitivityGrid;
+  };
+  relative_valuation: RelativeValuationData;
+}
+
 export interface StockDashboard {
   quote: StockQuote;
   profile: StockProfile;
@@ -106,6 +220,7 @@ export interface StockDashboard {
   };
   financial_statements?: FinancialStatementsData | null;
   ratio_dashboard?: RatioDashboardData | null;
+  valuation_engine?: ValuationEngineData | null;
 }
 
 export interface StockSummary {
