@@ -528,7 +528,7 @@ export function StockDashboard() {
 
       {!loading && dashboard && summary && !isBeginner && (
         <>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-5">
             <MetricChip
               label="P/E Ratio"
               metricKey="pe"
