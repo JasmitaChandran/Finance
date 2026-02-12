@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-body: "IBM Plex Sans", sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+
+  --bg: #07090d;
+  --bg-soft: #0f131a;
+  --card: rgba(18, 23, 31, 0.78);
+  --card-hover: rgba(25, 31, 41, 0.82);
+  --text-main: #f4f7fb;
+  --text-muted: #9ea8b6;
+  --accent: #2dd4bf;
+  --accent-2: #f97316;
+  --border-glass: rgba(255, 255, 255, 0.09);
+}
+
+:root[data-theme="light"] {
+  --bg: #eef3f8;
+  --bg-soft: #ffffff;
+  --card: rgba(255, 255, 255, 0.84);
+  --card-hover: rgba(255, 255, 255, 0.95);
+  --text-main: #0e1626;
+  --text-muted: #536071;
+  --accent: #0f766e;
+  --accent-2: #ea580c;
+  --border-glass: rgba(14, 22, 38, 0.11);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-body);
+  background: radial-gradient(1200px 600px at 15% -10%, rgba(45, 212, 191, 0.09), transparent 55%),
+    radial-gradient(900px 500px at 95% 110%, rgba(249, 115, 22, 0.07), transparent 55%),
+    var(--bg);
+  color: var(--text-main);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+input,
+button,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
