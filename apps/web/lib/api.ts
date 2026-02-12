@@ -68,6 +68,10 @@ export const api = {
     const qs = searchParams.toString();
     return call<{ total: number; items: Array<{ symbol: string; name: string; exchange: string }> }>(`/stocks/universe${qs ? `?${qs}` : ""}`);
   },
+  getHistory: (symbol: string, period = "6mo") =>
+    call<{ symbol: string; items: Array<{ date: string; open?: number; high?: number; low?: number; close: number; adj_close?: number; volume: number }> }>(
+      `/stocks/${symbol}/history?period=${encodeURIComponent(period)}`
+    ),
   getDashboard: (symbol: string) => call<StockDashboard>(`/stocks/${symbol}/dashboard`),
   explainMetric: (metric: string, value?: number, symbol?: string) =>
     call<{ title: string; simple_explanation: string; analogy: string; what_good_looks_like: string; caution: string }>(

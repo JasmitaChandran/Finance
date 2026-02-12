@@ -1,5 +1,15 @@
 export type AppMode = "beginner" | "pro";
 
+export interface OHLCVPoint {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  adj_close?: number;
+  volume: number;
+}
+
 export interface StockQuote {
   symbol: string;
   name: string;
@@ -193,7 +203,7 @@ export interface StockDashboard {
   profile: StockProfile;
   ratios: Record<string, number | null>;
   financial_highlights: Record<string, string | number | null>;
-  history: Array<{ date: string; open?: number; high?: number; low?: number; close: number; adj_close?: number; volume: number }>;
+  history: OHLCVPoint[];
   market_data?: {
     live_price?: number | null;
     changes_percent?: { "1d"?: number | null; "1w"?: number | null; "1m"?: number | null; "1y"?: number | null; "5y"?: number | null };

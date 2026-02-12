@@ -8,6 +8,7 @@ import { FinancialStatementsPanel } from "@/components/financial-statements-pane
 import { MetricChip } from "@/components/metric-chip";
 import { PriceChart } from "@/components/price-chart";
 import { RatioDashboardPanel } from "@/components/ratio-dashboard-panel";
+import { TechnicalAnalysisPanel } from "@/components/technical-analysis-panel";
 import { useUI } from "@/components/providers";
 import { ValuationEnginePanel } from "@/components/valuation-engine-panel";
 import { api } from "@/lib/api";
@@ -376,6 +377,9 @@ export function StockDashboard() {
   const financialStatementsSection = <FinancialStatementsPanel data={dashboard?.financial_statements} />;
   const ratioDashboardSection = <RatioDashboardPanel data={dashboard?.ratio_dashboard} />;
   const valuationEngineSection = <ValuationEnginePanel data={dashboard?.valuation_engine} />;
+  const technicalAnalysisSection = (
+    <TechnicalAnalysisPanel symbol={dashboard?.quote.symbol || "AAPL"} currency={dashboard?.quote.currency} initialHistory={dashboard?.history || []} />
+  );
 
   if (error) {
     return (
@@ -639,6 +643,7 @@ export function StockDashboard() {
           {financialStatementsSection}
           {ratioDashboardSection}
           {valuationEngineSection}
+          {technicalAnalysisSection}
         </>
       )}
 
@@ -775,6 +780,7 @@ export function StockDashboard() {
           {financialStatementsSection}
           {ratioDashboardSection}
           {valuationEngineSection}
+          {technicalAnalysisSection}
         </>
       )}
     </section>
