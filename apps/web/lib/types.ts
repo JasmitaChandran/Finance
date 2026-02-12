@@ -42,6 +42,14 @@ export interface NewsSummary {
   source_count: number;
 }
 
+export interface NewsArticle {
+  title: string;
+  publisher?: string;
+  link?: string;
+  published?: string;
+  summary?: string;
+}
+
 export interface User {
   id: string;
   email: string;

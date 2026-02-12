@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { ArrowUpRight, ShieldAlert, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -263,6 +264,7 @@ export function StockDashboard() {
   const oneMonthReturn = computeReturn(latestClose, monthBase);
   const sixMonthReturn = computeReturn(latestClose, halfYearBase);
   const volatility = annualizedVolatility(history);
+  const newsPageHref = `/news?symbol=${encodeURIComponent(dashboard?.quote.symbol || "AAPL")}`;
 
   if (error) {
     return (
@@ -488,7 +490,12 @@ export function StockDashboard() {
             </div>
 
             <div className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
-              <h3 className="font-display text-lg">AI News Summary</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="font-display text-lg">AI News Summary</h3>
+                <Link href={newsPageHref} className="rounded-lg border border-borderGlass px-2 py-1 text-xs text-textMuted hover:text-textMain">
+                  Open News Page
+                </Link>
+              </div>
               {!news ? (
                 <p className="mt-2 text-sm text-textMuted">No news data yet.</p>
               ) : (
@@ -503,9 +510,11 @@ export function StockDashboard() {
                   </div>
                   <ul className="mt-4 space-y-2 text-sm text-textMuted">
                     {newsBullets.slice(0, 5).map((bullet) => (
-                      <li key={bullet} className="rounded-lg border border-borderGlass bg-bgSoft p-3">
-                        <ArrowUpRight className="mr-2 inline h-3.5 w-3.5 text-accent" />
-                        {bullet}
+                      <li key={bullet}>
+                        <Link href={newsPageHref} className="block rounded-lg border border-borderGlass bg-bgSoft p-3 hover:border-accent">
+                          <ArrowUpRight className="mr-2 inline h-3.5 w-3.5 text-accent" />
+                          {bullet}
+                        </Link>
                       </li>
                     ))}
                     {!newsBullets.length && <li className="rounded-lg border border-borderGlass bg-bgSoft p-3">No readable headlines found. Try refreshing.</li>}
@@ -612,7 +621,12 @@ export function StockDashboard() {
             </div>
 
             <div className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
-              <h3 className="font-display text-lg">AI News Summary</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="font-display text-lg">AI News Summary</h3>
+                <Link href={newsPageHref} className="rounded-lg border border-borderGlass px-2 py-1 text-xs text-textMuted hover:text-textMain">
+                  Open News Page
+                </Link>
+              </div>
               {!news ? (
                 <p className="mt-2 text-sm text-textMuted">No news data yet.</p>
               ) : (
@@ -627,9 +641,11 @@ export function StockDashboard() {
                   </div>
                   <ul className="mt-4 space-y-2 text-sm text-textMuted">
                     {newsBullets.slice(0, 5).map((bullet) => (
-                      <li key={bullet} className="rounded-lg border border-borderGlass bg-bgSoft p-3">
-                        <ArrowUpRight className="mr-2 inline h-3.5 w-3.5 text-accent" />
-                        {bullet}
+                      <li key={bullet}>
+                        <Link href={newsPageHref} className="block rounded-lg border border-borderGlass bg-bgSoft p-3 hover:border-accent">
+                          <ArrowUpRight className="mr-2 inline h-3.5 w-3.5 text-accent" />
+                          {bullet}
+                        </Link>
                       </li>
                     ))}
                     {!newsBullets.length && <li className="rounded-lg border border-borderGlass bg-bgSoft p-3">No readable headlines found. Try refreshing.</li>}

@@ -7,6 +7,7 @@ import { useAuth, useUI } from "@/components/providers";
 
 const nav = [
   { href: "/", label: "Dashboard" },
+  { href: "/news", label: "News" },
   { href: "/screener", label: "Screener" },
   { href: "/compare", label: "Compare" },
   { href: "/watchlist", label: "Watchlist" },

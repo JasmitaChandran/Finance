@@ -1,4 +1,4 @@
-import type { NewsSummary, StockDashboard, StockSummary, User } from "@/lib/types";
+import type { NewsArticle, NewsSummary, StockDashboard, StockSummary, User } from "@/lib/types";
 
 const FALLBACK_API_BASE = "/api/v1";
 const RAW_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || FALLBACK_API_BASE;
@@ -83,6 +83,7 @@ export const api = {
       body: JSON.stringify({ symbol, mode })
     }),
   getNewsSummary: (symbol: string) => call<NewsSummary>(`/news/${symbol}/summary`),
+  getNewsItems: (symbol: string) => call<{ symbol: string; items: NewsArticle[] }>(`/news/${symbol}/items`),
   runScreener: (payload: {
     symbols: string[];
     min_market_cap?: number;
