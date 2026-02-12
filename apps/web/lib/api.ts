@@ -60,6 +60,14 @@ async function call<T>(path: string, init?: RequestInit, token?: string): Promis
 
 export const api = {
   searchStocks: (q: string) => call<{ items: Array<{ symbol: string; name: string }> }>(`/stocks/search?q=${encodeURIComponent(q)}`),
+  getUniverse: (params?: { q?: string; offset?: number; limit?: number }) => {
+    const searchParams = new URLSearchParams();
+    if (params?.q) searchParams.set("q", params.q);
+    if (params?.offset !== undefined) searchParams.set("offset", String(params.offset));
+    if (params?.limit !== undefined) searchParams.set("limit", String(params.limit));
+    const qs = searchParams.toString();
+    return call<{ total: number; items: Array<{ symbol: string; name: string; exchange: string }> }>(`/stocks/universe${qs ? `?${qs}` : ""}`);
+  },
   getDashboard: (symbol: string) => call<StockDashboard>(`/stocks/${symbol}/dashboard`),
   explainMetric: (metric: string, value?: number, symbol?: string) =>
     call<{ title: string; simple_explanation: string; analogy: string; what_good_looks_like: string; caution: string }>(

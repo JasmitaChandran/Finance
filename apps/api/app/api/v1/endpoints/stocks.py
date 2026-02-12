@@ -5,6 +5,7 @@ from fastapi import APIRouter, Query
 from app.schemas.stock import ExplainMetricRequest, StockSummaryRequest
 from app.services.ai_service import ai_service
 from app.services.stock_service import stock_service
+from app.services.universe_service import universe_service
 
 router = APIRouter(prefix="/stocks", tags=["stocks"])
 
@@ -12,6 +13,15 @@ router = APIRouter(prefix="/stocks", tags=["stocks"])
 @router.get("/search")
 async def search_stocks(q: str = Query(min_length=1, max_length=30)):
     return {"items": await stock_service.search(q)}
+
+
+@router.get("/universe")
+async def stock_universe(
+    q: str = Query(default="", max_length=60),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=80, ge=1, le=200),
+):
+    return await universe_service.list_stocks(query=q, offset=offset, limit=limit)
 
 
 @router.get("/{symbol}/quote")

@@ -10,7 +10,11 @@ import { api } from "@/lib/api";
 import { formatCurrency, formatLarge, ratioToPercent } from "@/lib/format";
 import type { NewsSummary, StockDashboard as StockDashboardType, StockSummary } from "@/lib/types";
 
-const popularSymbols = ["AAPL", "MSFT", "NVDA", "GOOGL", "TSLA", "AMZN", "META", "JPM"];
+type UniverseStock = {
+  symbol: string;
+  name: string;
+  exchange: string;
+};
 
 function toNumber(value: unknown): number | null {
   if (typeof value !== "number" || Number.isNaN(value)) return null;
@@ -99,6 +103,13 @@ export function StockDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [voiceMode, setVoiceMode] = useState(false);
+  const [universeStocks, setUniverseStocks] = useState<UniverseStock[]>([]);
+  const [universeTotal, setUniverseTotal] = useState(0);
+  const [universeLoading, setUniverseLoading] = useState(false);
+  const [universeError, setUniverseError] = useState<string | null>(null);
+  const [searchSuggestions, setSearchSuggestions] = useState<Array<{ symbol: string; name: string }>>([]);
+  const [searchInfo, setSearchInfo] = useState<string | null>(null);
+  const [searching, setSearching] = useState(false);
 
   const isBeginner = mode === "beginner";
   const newsBullets = (news?.bullets ?? []).map((bullet) => bullet.trim()).filter(Boolean);
@@ -145,9 +156,86 @@ export function StockDashboard() {
     [mode]
   );
 
+  const loadUniverse = useCallback(async (q: string, offset: number, replace: boolean) => {
+    setUniverseLoading(true);
+    if (replace) setUniverseError(null);
+    try {
+      const response = await api.getUniverse({ q, offset, limit: 80 });
+      setUniverseTotal(response.total);
+      setUniverseStocks((previous) => {
+        if (replace) return response.items;
+        const merged = [...previous];
+        for (const item of response.items) {
+          if (!merged.some((existing) => existing.symbol === item.symbol)) merged.push(item);
+        }
+        return merged;
+      });
+    } catch (err) {
+      setUniverseError(err instanceof Error ? err.message : "Failed to load stock universe.");
+    } finally {
+      setUniverseLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     load("AAPL");
   }, [load]);
+
+  useEffect(() => {
+    loadUniverse("", 0, true);
+  }, [loadUniverse]);
+
+  const selectSymbol = useCallback(
+    async (symbol: string) => {
+      const upper = symbol.trim().toUpperCase();
+      if (!upper) return;
+      setQuery(upper);
+      setSearchInfo(null);
+      setSearchSuggestions([]);
+      await load(upper);
+    },
+    [load]
+  );
+
+  const handleExplore = useCallback(async () => {
+    const term = query.trim();
+    if (!term) return;
+
+    setSearchInfo(null);
+    setSearching(true);
+
+    try {
+      await loadUniverse(term, 0, true);
+      const response = await api.searchStocks(term);
+      const suggestions = (response.items || [])
+        .filter((item) => item.symbol)
+        .slice(0, 8)
+        .map((item) => ({ symbol: item.symbol.toUpperCase(), name: item.name || item.symbol.toUpperCase() }));
+
+      setSearchSuggestions(suggestions);
+
+      if (suggestions.length) {
+        const upper = term.toUpperCase();
+        const exact = suggestions.find((item) => item.symbol === upper);
+        const chosen = exact ?? suggestions[0];
+        if (!exact) {
+          setSearchInfo(`Showing ${chosen.symbol} (${chosen.name}). Choose another suggestion below if needed.`);
+        }
+        await selectSymbol(chosen.symbol);
+      } else {
+        const looksLikeTicker = /^[A-Za-z][A-Za-z0-9.-]{0,9}$/.test(term);
+        if (looksLikeTicker) {
+          await selectSymbol(term.toUpperCase());
+        } else {
+          setSearchInfo(`No symbol matches found for "${term}". Try another company name or ticker.`);
+        }
+      }
+    } catch {
+      setSearchInfo("Could not fetch recommendations right now. Try again or enter a ticker symbol.");
+    } finally {
+      setSearching(false);
+    }
+  }, [loadUniverse, query, selectSymbol]);
 
   function speakSummary() {
     if (!summary || typeof window === "undefined" || !("speechSynthesis" in window)) return;
@@ -200,34 +288,105 @@ export function StockDashboard() {
             className="rounded-2xl border border-borderGlass bg-bgSoft p-4"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!query.trim()) return;
-              load(query.trim().toUpperCase());
+              handleExplore();
             }}
           >
             <label className="text-xs uppercase tracking-wide text-textMuted">Stock symbol or company</label>
             <div className="mt-2 flex items-center gap-2">
               <input
                 value={query}
-                onChange={(event) => setQuery(event.target.value.toUpperCase())}
+                onChange={(event) => setQuery(event.target.value)}
                 className="flex-1 rounded-xl border border-borderGlass bg-card px-4 py-2 text-sm outline-none transition focus:border-accent"
-                placeholder="AAPL"
+                placeholder="Explore Stocks (e.g. SAP)"
               />
-              <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-black transition hover:opacity-90">{copy.explore}</button>
+              <button className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-black transition hover:opacity-90">
+                {searching ? "Finding..." : copy.explore}
+              </button>
             </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {popularSymbols.map((symbol) => (
+
+            {searchInfo && <p className="mt-2 text-xs text-textMuted">{searchInfo}</p>}
+
+            {!!searchSuggestions.length && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {searchSuggestions.map((item) => (
+                  <button
+                    type="button"
+                    key={`suggestion-${item.symbol}`}
+                    onClick={() => {
+                      selectSymbol(item.symbol);
+                    }}
+                    className="rounded-md border border-borderGlass bg-card px-2.5 py-1 text-xs text-textMuted transition hover:border-accent hover:text-textMain"
+                  >
+                    {item.symbol} • {item.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-3 rounded-xl border border-borderGlass bg-card p-3">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  key={symbol}
-                  onClick={() => {
-                    setQuery(symbol);
-                    load(symbol);
-                  }}
-                  className="rounded-lg border border-borderGlass bg-card px-2.5 py-1 text-xs text-textMuted transition hover:text-textMain"
+                  onClick={() => loadUniverse(query.trim().toUpperCase(), 0, true)}
+                  className="rounded-lg border border-borderGlass bg-bgSoft px-3 py-2 text-xs text-textMain hover:bg-cardHover"
                 >
-                  {symbol}
+                  Search All
                 </button>
-              ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuery("");
+                    loadUniverse("", 0, true);
+                  }}
+                  className="rounded-lg border border-borderGlass bg-bgSoft px-3 py-2 text-xs text-textMuted hover:text-textMain"
+                >
+                  Reset
+                </button>
+              </div>
+
+              <p className="mt-2 text-xs text-textMuted">
+                {query.trim() ? `Matches: ${universeTotal.toLocaleString()}` : `All listed symbols: ${universeTotal.toLocaleString()}`}
+              </p>
+
+              {universeError && <p className="mt-1 text-xs text-danger">{universeError}</p>}
+
+              <div className="mt-2 max-h-44 overflow-y-auto rounded-lg border border-borderGlass bg-bgSoft p-2">
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+                  {universeStocks.map((stock) => (
+                    <button
+                      type="button"
+                      key={`${stock.exchange}-${stock.symbol}`}
+                      onClick={() => {
+                        selectSymbol(stock.symbol);
+                      }}
+                      className="rounded-md border border-borderGlass bg-card px-2 py-2 text-left text-xs transition hover:border-accent hover:bg-cardHover"
+                    >
+                      <p className="font-semibold text-textMain">{stock.symbol}</p>
+                      <p className="truncate text-[11px] text-textMuted">{stock.exchange}</p>
+                    </button>
+                  ))}
+                </div>
+
+                {!universeLoading && !universeStocks.length && (
+                  <p className="py-4 text-center text-xs text-textMuted">No symbols found for this search.</p>
+                )}
+              </div>
+
+              <div className="mt-2 flex items-center justify-between">
+                <p className="text-[11px] text-textMuted">
+                  Showing {universeStocks.length.toLocaleString()} of {universeTotal.toLocaleString()}
+                </p>
+                {universeStocks.length < universeTotal && (
+                  <button
+                    type="button"
+                    onClick={() => loadUniverse(query.trim().toUpperCase(), universeStocks.length, false)}
+                    disabled={universeLoading}
+                    className="rounded-lg border border-borderGlass bg-bgSoft px-3 py-1.5 text-xs text-textMain hover:bg-cardHover disabled:opacity-50"
+                  >
+                    {universeLoading ? "Loading..." : "Load more"}
+                  </button>
+                )}
+              </div>
             </div>
           </form>
         </div>
