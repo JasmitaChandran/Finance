@@ -48,6 +48,32 @@ export interface FinancialStatementsData {
   };
 }
 
+export interface RatioDashboardGroup {
+  [key: string]: number | null;
+}
+
+export interface RatioDashboardData {
+  year?: string | null;
+  prior_year?: string | null;
+  liquidity: RatioDashboardGroup;
+  solvency: RatioDashboardGroup;
+  profitability: RatioDashboardGroup;
+  efficiency: RatioDashboardGroup;
+  dupont_analysis: RatioDashboardGroup;
+  altman_z_score: {
+    score?: number | null;
+    zone?: string;
+    components?: RatioDashboardGroup;
+  };
+  piotroski_f_score: {
+    score?: number | null;
+    max_score?: number;
+    available_checks?: number;
+    label?: string;
+    signals?: Record<string, boolean | null>;
+  };
+}
+
 export interface StockDashboard {
   quote: StockQuote;
   profile: StockProfile;
@@ -79,6 +105,7 @@ export interface StockDashboard {
     adjusted_close?: number | null;
   };
   financial_statements?: FinancialStatementsData | null;
+  ratio_dashboard?: RatioDashboardData | null;
 }
 
 export interface StockSummary {

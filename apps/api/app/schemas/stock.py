@@ -31,6 +31,7 @@ class StockDashboard(BaseModel):
     market_data: dict | None = None
     ohlc: dict | None = None
     financial_statements: dict | None = None
+    ratio_dashboard: dict | None = None
 
 
 class ExplainMetricRequest(BaseModel):

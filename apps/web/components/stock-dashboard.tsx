@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { FinancialStatementsPanel } from "@/components/financial-statements-panel";
 import { MetricChip } from "@/components/metric-chip";
 import { PriceChart } from "@/components/price-chart";
+import { RatioDashboardPanel } from "@/components/ratio-dashboard-panel";
 import { useUI } from "@/components/providers";
 import { api } from "@/lib/api";
 import { formatCurrency, formatLarge, ratioToPercent } from "@/lib/format";
@@ -372,6 +373,7 @@ export function StockDashboard() {
     </div>
   );
   const financialStatementsSection = <FinancialStatementsPanel data={dashboard?.financial_statements} />;
+  const ratioDashboardSection = <RatioDashboardPanel data={dashboard?.ratio_dashboard} />;
 
   if (error) {
     return (
@@ -633,6 +635,7 @@ export function StockDashboard() {
           {basicMarketDataSection}
           {ohlcSection}
           {financialStatementsSection}
+          {ratioDashboardSection}
         </>
       )}
 
@@ -767,6 +770,7 @@ export function StockDashboard() {
           {basicMarketDataSection}
           {ohlcSection}
           {financialStatementsSection}
+          {ratioDashboardSection}
         </>
       )}
     </section>
