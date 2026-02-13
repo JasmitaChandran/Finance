@@ -103,10 +103,10 @@ function debtSignal(debtToEquity: number | null) {
   if (debtToEquity === null) {
     return { label: "Unknown", toneClass: "text-textMuted", description: "Debt data unavailable from provider." };
   }
-  if (debtToEquity < 80) {
+  if (debtToEquity < 1) {
     return { label: "Comfortable", toneClass: "text-success", description: "Debt level looks manageable for most sectors." };
   }
-  if (debtToEquity <= 150) {
+  if (debtToEquity <= 2) {
     return { label: "Watch", toneClass: "text-warning", description: "Debt is moderate; cash flow quality matters more here." };
   }
   return { label: "High", toneClass: "text-danger", description: "Leverage is high and can increase downside during stress." };
@@ -540,7 +540,7 @@ export function StockDashboard() {
 
             <article className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
               <p className="text-xs uppercase tracking-wide text-textMuted">Financial safety</p>
-              <p className="mt-2 text-2xl font-semibold text-textMain">{debtToEquity === null ? "-" : debtToEquity.toFixed(2)}</p>
+              <p className="mt-2 text-2xl font-semibold text-textMain">{debtToEquity === null ? "-" : `${debtToEquity.toFixed(2)}x`}</p>
               <p className={`mt-2 text-sm font-medium ${leverage.toneClass}`}>{leverage.label}</p>
               <p className="mt-1 text-xs text-textMuted">{leverage.description}</p>
             </article>
@@ -681,7 +681,7 @@ export function StockDashboard() {
               metricKey="debt_to_equity"
               symbol={dashboard.quote.symbol}
               rawValue={dashboard.ratios.debt_to_equity ?? null}
-              value={dashboard.ratios.debt_to_equity ? Number(dashboard.ratios.debt_to_equity).toFixed(2) : "-"}
+              value={dashboard.ratios.debt_to_equity ? `${Number(dashboard.ratios.debt_to_equity).toFixed(2)}x` : "-"}
             />
             <MetricChip
               label="Revenue Growth"

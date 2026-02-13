@@ -23,6 +23,8 @@ export function MetricChip({ label, metricKey, value, symbol, rawValue }: Metric
     analogy: string;
     what_good_looks_like: string;
     caution: string;
+    formula?: string;
+    unit?: string;
   }>(null);
 
   async function toggleInsight() {
@@ -65,6 +67,12 @@ export function MetricChip({ label, metricKey, value, symbol, rawValue }: Metric
             <>
               <p className="font-semibold text-textMain">{insight.title}</p>
               <p className="mt-1">{insight.simple_explanation}</p>
+              {!!insight.formula && (
+                <p className="mt-2">
+                  Formula: <span className="text-textMain">{insight.formula}</span>
+                  {!!insight.unit && <span className="text-textMuted"> ({insight.unit})</span>}
+                </p>
+              )}
               <p className="mt-2 text-textMain">Analogy: <span className="text-textMuted">{insight.analogy}</span></p>
               <p className="mt-2">Good signal: {insight.what_good_looks_like}</p>
               <p className="mt-1">Watchout: {insight.caution}</p>

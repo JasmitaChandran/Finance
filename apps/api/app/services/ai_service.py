@@ -19,7 +19,7 @@ class AIService:
         if self.client:
             prompt = (
                 "Explain the following stock metric for beginners in plain language. "
-                "Return JSON with keys: title, simple_explanation, analogy, what_good_looks_like, caution. "
+                "Return JSON with keys: title, simple_explanation, analogy, what_good_looks_like, caution, formula, unit. "
                 f"Metric: {metric}, Value: {value}, Symbol: {symbol}."
             )
             response = self.client.responses.create(model=settings.openai_model, input=prompt)
@@ -34,6 +34,8 @@ class AIService:
                 "name": metric,
                 "simple": "This metric helps evaluate business health and valuation.",
                 "analogy": "Think of it as a dashboard signal rather than a single final verdict.",
+                "formula": "Formula varies by metric family.",
+                "unit": "Contextual",
             }
 
         return {
@@ -42,6 +44,8 @@ class AIService:
             "analogy": hint["analogy"],
             "what_good_looks_like": "Healthy values depend on industry and trend, not one-time numbers.",
             "caution": "Always combine this with growth, debt, and competitive position.",
+            "formula": hint.get("formula"),
+            "unit": hint.get("unit"),
         }
 
     async def stock_summary(self, symbol: str, dashboard: dict, mode: str = "beginner") -> dict:

@@ -1,4 +1,18 @@
-import type { MarketHeatmapData, NewsArticle, NewsSummary, SmartInsightsData, StockDashboard, StockSummary, User } from "@/lib/types";
+import type {
+  MarketHeatmapData,
+  NewsArticle,
+  NewsSummary,
+  PortfolioInsights,
+  PortfolioListItem,
+  PortfolioPosition,
+  PortfolioTransaction,
+  ScreenerPreset,
+  ScreenerRunResponse,
+  SmartInsightsData,
+  StockDashboard,
+  StockSummary,
+  User,
+} from "@/lib/types";
 
 const FALLBACK_API_BASE = "/api/v1";
 const RAW_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || FALLBACK_API_BASE;
@@ -76,7 +90,7 @@ export const api = {
   getSmartInsights: (symbol: string) => call<SmartInsightsData>(`/stocks/${symbol}/smart-insights`),
   getMarketHeatmap: (limit = 60) => call<MarketHeatmapData>(`/stocks/market-heatmap?limit=${Math.max(20, Math.min(200, limit))}`),
   explainMetric: (metric: string, value?: number, symbol?: string) =>
-    call<{ title: string; simple_explanation: string; analogy: string; what_good_looks_like: string; caution: string }>(
+    call<{ title: string; simple_explanation: string; analogy: string; what_good_looks_like: string; caution: string; formula?: string; unit?: string }>(
       "/stocks/explain-metric",
       {
         method: "POST",
@@ -91,12 +105,43 @@ export const api = {
   getNewsSummary: (symbol: string) => call<NewsSummary>(`/news/${symbol}/summary`),
   getNewsItems: (symbol: string) => call<{ symbol: string; items: NewsArticle[] }>(`/news/${symbol}/items`),
   runScreener: (payload: {
-    symbols: string[];
+    symbols?: string[];
     min_market_cap?: number;
+    max_market_cap?: number;
+    min_pe?: number;
     max_pe?: number;
     min_roe?: number;
     min_revenue_growth?: number;
-  }) => call<{ items: Array<Record<string, unknown>> }>("/screener/run", { method: "POST", body: JSON.stringify(payload) }),
+    max_debt_to_equity?: number;
+    min_rsi?: number;
+    max_rsi?: number;
+    min_beta?: number;
+    max_beta?: number;
+    min_sharpe_ratio?: number;
+    max_drawdown_5y_max?: number;
+    max_volatility_percentile?: number;
+    min_rolling_beta?: number;
+    max_rolling_beta?: number;
+    fcf_positive_5y?: boolean;
+    debt_decreasing_trend?: boolean;
+    roic_gt_wacc?: boolean;
+    min_earnings_consistency?: number;
+    min_revenue_cagr_3y?: number;
+    min_eps_cagr_5y?: number;
+    operating_leverage_improving?: boolean;
+    breakout_only?: boolean;
+    volume_spike_only?: boolean;
+    magic_formula_only?: boolean;
+    low_volatility_only?: boolean;
+    high_momentum_only?: boolean;
+    dividend_aristocrats_only?: boolean;
+    insider_buying_only?: boolean;
+    sort_by?: string;
+    sort_order?: "asc" | "desc";
+    universe_limit?: number;
+    limit?: number;
+  }) => call<ScreenerRunResponse>("/screener/run", { method: "POST", body: JSON.stringify(payload) }),
+  screenerPresets: () => call<{ items: ScreenerPreset[] }>("/screener/presets"),
   compare: (symbols: string[]) => call<{ items: Array<Record<string, unknown>> }>(`/compare?symbols=${symbols.join(",")}`),
   lessons: () => call<{ items: Array<{ id: string; title: string; level: string; duration_minutes: number; summary: string }> }>("/learning/lessons"),
   tutor: (question: string) => call<{ answer: string }>("/learning/tutor", { method: "POST", body: JSON.stringify({ question }) }),
@@ -129,15 +174,22 @@ export const api = {
     call<{ watchlist: string; items: Array<Record<string, unknown>> }>(`/watchlists/${watchlistId}/quotes`, undefined, token),
 
   listPortfolios: (token: string) =>
-    call<{ items: Array<{ id: string; name: string; positions: Array<Record<string, unknown>> }> }>("/portfolios", undefined, token),
+    call<{ items: PortfolioListItem[] }>("/portfolios", undefined, token),
   createPortfolio: (name: string, token: string) =>
     call<{ id: string; name: string }>("/portfolios", { method: "POST", body: JSON.stringify({ name }) }, token),
   upsertPosition: (
     portfolioId: string,
     payload: { symbol: string; quantity: number; average_buy_price: number; sector?: string },
     token: string
-  ) => call(`/portfolios/${portfolioId}/positions`, { method: "POST", body: JSON.stringify(payload) }, token),
-  portfolioInsights: (portfolioId: string, token: string) => call<Record<string, unknown>>(`/portfolios/${portfolioId}/insights`, undefined, token),
+  ) => call<PortfolioPosition>(`/portfolios/${portfolioId}/positions`, { method: "POST", body: JSON.stringify(payload) }, token),
+  addPortfolioTransaction: (
+    portfolioId: string,
+    payload: { symbol: string; side: "buy" | "sell"; quantity: number; price: number; fee?: number; trade_date?: string; sector?: string; note?: string },
+    token: string
+  ) => call<PortfolioTransaction>(`/portfolios/${portfolioId}/transactions`, { method: "POST", body: JSON.stringify(payload) }, token),
+  listPortfolioTransactions: (portfolioId: string, token: string, limit = 200) =>
+    call<{ items: PortfolioTransaction[] }>(`/portfolios/${portfolioId}/transactions?limit=${Math.max(1, Math.min(1000, limit))}`, undefined, token),
+  portfolioInsights: (portfolioId: string, token: string) => call<PortfolioInsights>(`/portfolios/${portfolioId}/insights`, undefined, token),
 
   listAlerts: (token: string) =>
     call<{ items: Array<{ id: string; symbol: string; target_price: number; above: boolean; is_active: boolean }> }>("/alerts", undefined, token),

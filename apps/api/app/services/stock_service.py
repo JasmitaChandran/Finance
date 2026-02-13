@@ -338,7 +338,13 @@ class StockService:
         operating_cash_flow = latest.get("operating_cash_flow")
 
         roa = self._safe_div(net_income, total_assets)
-        roe = self._safe_div(net_income, equity)
+        average_equity = None
+        previous_equity = previous.get("equity")
+        if equity is not None and previous_equity is not None:
+            average_equity = (equity + previous_equity) / 2
+        elif equity is not None:
+            average_equity = equity
+        roe = self._safe_div(net_income, average_equity)
         if roe is None:
             roe = self._normalize_rate(profile.get("roe"))
         roce = self._safe_div(ebit, (total_assets - current_liabilities) if total_assets is not None and current_liabilities is not None else None)
@@ -1016,6 +1022,8 @@ class StockService:
             try:
                 method = getattr(provider, method_name)
                 return await method(*args, **kwargs)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:  # pragma: no cover
                 errors.append(f"{provider.name}: {exc}")
                 continue
@@ -1068,14 +1076,24 @@ class StockService:
         except HTTPException:
             financial_statements = {"years": [], "income_statement": {"raw": [], "common_size": []}, "balance_sheet": {"raw": [], "common_size": []}, "cash_flow": {"raw": [], "common_size": []}}
 
+        ratio_dashboard = self._build_ratio_dashboard(quote, profile, financial_statements)
+        profitability = ratio_dashboard.get("profitability", {}) if isinstance(ratio_dashboard, dict) else {}
+        solvency = ratio_dashboard.get("solvency", {}) if isinstance(ratio_dashboard, dict) else {}
+
+        normalized_debt_to_equity = self._as_number(solvency.get("debt_to_equity"))
+        if normalized_debt_to_equity is None:
+            profile_debt_to_equity = self._as_number(profile.get("debt_to_equity"))
+            if profile_debt_to_equity is not None:
+                normalized_debt_to_equity = profile_debt_to_equity / 100 if abs(profile_debt_to_equity) > 10 else profile_debt_to_equity
+
         ratios = {
             "pe": profile.get("trailing_pe"),
             "pb": profile.get("pb"),
             "peg": profile.get("peg"),
-            "roe": profile.get("roe"),
-            "roce": profile.get("roce"),
-            "debt_to_equity": profile.get("debt_to_equity"),
-            "profit_margin": profile.get("profit_margin"),
+            "roe": profitability.get("roe") if profitability.get("roe") is not None else profile.get("roe"),
+            "roce": profitability.get("roce") if profitability.get("roce") is not None else profile.get("roce"),
+            "debt_to_equity": normalized_debt_to_equity,
+            "profit_margin": profitability.get("net_margin") if profitability.get("net_margin") is not None else profile.get("profit_margin"),
             "revenue_growth": profile.get("revenue_growth"),
             "dividend_yield": profile.get("dividend_yield"),
             "eps": profile.get("eps"),
@@ -1130,10 +1148,10 @@ class StockService:
             "dividend_yield": self._as_number(profile.get("dividend_yield")),
             "eps": self._as_number(profile.get("eps")),
             "book_value": self._as_number(profile.get("book_value")),
-            "roe": self._as_number(profile.get("roe")),
-            "roce": self._as_number(profile.get("roce")),
+            "roe": self._as_number(ratios.get("roe")),
+            "roce": self._as_number(ratios.get("roce")),
+            "debt_to_equity": self._as_number(ratios.get("debt_to_equity")),
         }
-        ratio_dashboard = self._build_ratio_dashboard(quote, profile, financial_statements)
         valuation_engine = await self._build_valuation_engine(symbol, quote, profile, financial_statements)
 
         dashboard = {

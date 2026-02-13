@@ -351,6 +351,178 @@ export interface NewsArticle {
   summary?: string;
 }
 
+export interface PortfolioPosition {
+  id: string;
+  symbol: string;
+  quantity: number;
+  average_buy_price: number;
+  sector?: string | null;
+}
+
+export interface PortfolioTransaction {
+  id: string;
+  symbol: string;
+  side: "buy" | "sell" | string;
+  quantity: number;
+  price: number;
+  fee: number;
+  trade_date: string;
+  note?: string | null;
+  created_at: string;
+}
+
+export interface PortfolioListItem {
+  id: string;
+  name: string;
+  positions: PortfolioPosition[];
+  transaction_count?: number;
+}
+
+export interface PortfolioInsights {
+  portfolio_name: string;
+  market_value: number;
+  cost_basis: number;
+  unrealized_pnl: number;
+  holdings: Array<{
+    symbol: string;
+    sector?: string | null;
+    quantity: number;
+    average_buy_price: number;
+    current_price: number;
+    market_value: number;
+    cost_basis: number;
+    pnl: number;
+    beta?: number | null;
+  }>;
+  transactions: PortfolioTransaction[];
+  diversification_score: number;
+  risk_level: string;
+  suggestions: string[];
+  auto_pnl_calculation: {
+    market_value: number;
+    cost_basis: number;
+    unrealized_pnl: number;
+    realized_pnl: number;
+    total_pnl: number;
+  };
+  xirr_percent?: number | null;
+  asset_allocation: Array<{ symbol: string; value: number; weight_percent: number }>;
+  sector_allocation: Array<{ sector: string; value: number; weight_percent: number }>;
+  beta_of_portfolio?: number | null;
+  sharpe_ratio?: number | null;
+  sortino_ratio?: number | null;
+  calmar_ratio?: number | null;
+  information_ratio?: number | null;
+  max_drawdown?: number | null;
+  upside_capture?: number | null;
+  downside_capture?: number | null;
+  risk_vs_benchmark_comparison: {
+    benchmark_symbol: string;
+    portfolio_annual_return_percent?: number | null;
+    benchmark_annual_return_percent?: number | null;
+    portfolio_annual_volatility_percent?: number | null;
+    benchmark_annual_volatility_percent?: number | null;
+    tracking_error_percent?: number | null;
+    alpha_percent?: number | null;
+  };
+  tax_gain_calculation: {
+    realized_short_term: number;
+    realized_long_term: number;
+    unrealized_short_term: number;
+    unrealized_long_term: number;
+    estimated_tax_payable: number;
+  };
+}
+
+export interface ScreenerRow {
+  symbol: string;
+  name?: string;
+  sector?: string | null;
+  price?: number | null;
+  market_cap?: number | null;
+  pe?: number | null;
+  roe?: number | null;
+  revenue_growth?: number | null;
+  debt_to_equity?: number | null;
+  rsi_14?: number | null;
+  breakout?: boolean;
+  volume_spike?: boolean;
+  annualized_volatility_percent?: number | null;
+  volatility_percentile?: number | null;
+  momentum_1m_percent?: number | null;
+  momentum_6m_percent?: number | null;
+  momentum_1y_percent?: number | null;
+  beta?: number | null;
+  rolling_beta_1y?: number | null;
+  sharpe_ratio?: number | null;
+  max_drawdown_5y_percent?: number | null;
+  dividend_yield?: number | null;
+  fcf_yield?: number | null;
+  roic?: number | null;
+  revenue_cagr_3y?: number | null;
+  eps_cagr_5y?: number | null;
+  net_debt?: number | null;
+  ev_ebitda?: number | null;
+  piotroski_score?: number | null;
+  earnings_consistency_score?: number | null;
+  insider_net_shares_6m?: number | null;
+  quality_flags?: {
+    fcf_positive_5y?: boolean | null;
+    debt_decreasing_trend?: boolean | null;
+    roic_gt_wacc?: boolean | null;
+    operating_leverage_improving?: boolean | null;
+  };
+  advanced_flags?: {
+    magic_formula?: boolean;
+    low_volatility?: boolean;
+    high_momentum?: boolean;
+    dividend_aristocrat?: boolean;
+    insider_buying?: boolean | null;
+  };
+  score?: number;
+  score_breakdown?: {
+    quality?: number;
+    growth?: number;
+    risk?: number;
+    momentum?: number;
+  };
+  composite_rank?: number;
+  percentile_rank?: number;
+  sector_rank?: number;
+}
+
+export interface ScreenerRunMeta {
+  timed_out?: boolean;
+  partial?: boolean;
+  evaluated_symbols?: number;
+  requested_symbols?: number;
+  duration_ms?: number;
+  has_custom_symbols?: boolean;
+  universe_trimmed?: boolean;
+  trimmed_from?: number | null;
+  total_matches?: number;
+  sort_by?: string;
+  sort_order?: "asc" | "desc" | string;
+  elimination_counts?: Record<string, number>;
+  relaxation_suggestions?: Array<{
+    filter: string;
+    count: number;
+    suggestion: string;
+  }>;
+}
+
+export interface ScreenerRunResponse {
+  items: ScreenerRow[];
+  meta?: ScreenerRunMeta;
+}
+
+export interface ScreenerPreset {
+  id: string;
+  label: string;
+  for?: string;
+  filters: Record<string, unknown>;
+}
+
 export interface User {
   id: string;
   email: string;
