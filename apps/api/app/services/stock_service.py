@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -11,10 +11,22 @@ from app.core.cache import cache
 from app.services.providers.alpha_vantage_provider import AlphaVantageProvider
 from app.services.providers.fmp_provider import FMPProvider
 from app.services.providers.yahoo_provider import YahooFinanceProvider
+from app.services.news_service import news_service
 from app.services.universe_service import universe_service
 
 
 class StockService:
+    PANEL_CACHE_POLICIES = {
+        "price": {"fresh_ttl_seconds": 45, "stale_ttl_seconds": 180},
+        "summary": {"fresh_ttl_seconds": 120, "stale_ttl_seconds": 480},
+        "news": {"fresh_ttl_seconds": 180, "stale_ttl_seconds": 900},
+        "financials": {"fresh_ttl_seconds": 6 * 3600, "stale_ttl_seconds": 24 * 3600},
+        "ratios": {"fresh_ttl_seconds": 15 * 60, "stale_ttl_seconds": 2 * 3600},
+        "peers": {"fresh_ttl_seconds": 15 * 60, "stale_ttl_seconds": 2 * 3600},
+        "events": {"fresh_ttl_seconds": 10 * 60, "stale_ttl_seconds": 60 * 60},
+        "benchmark": {"fresh_ttl_seconds": 15 * 60, "stale_ttl_seconds": 2 * 3600},
+        "relevance": {"fresh_ttl_seconds": 10 * 60, "stale_ttl_seconds": 60 * 60},
+    }
     SECTOR_PEERS = {
         "technology": ["MSFT", "NVDA", "GOOGL", "META", "ORCL", "CRM", "ADBE", "INTC"],
         "communicationservices": ["GOOGL", "META", "NFLX", "DIS", "TMUS", "VZ", "T", "CHTR"],
@@ -619,6 +631,118 @@ class StockService:
         payload = {"data": wrapped.get("data"), "meta": meta}
         await cache.set(cache_key, payload, ttl_seconds=ttl_seconds)
         return wrapped.get("data"), meta
+
+    def _panel_policy(self, panel: str) -> dict[str, int]:
+        policy = self.PANEL_CACHE_POLICIES.get(panel, {"fresh_ttl_seconds": 120, "stale_ttl_seconds": 300})
+        fresh_ttl = max(1, int(policy.get("fresh_ttl_seconds", 120)))
+        stale_ttl = max(0, int(policy.get("stale_ttl_seconds", 300)))
+        return {"fresh_ttl_seconds": fresh_ttl, "stale_ttl_seconds": stale_ttl}
+
+    def _parse_datetime(self, value: str | None) -> datetime | None:
+        if not value or not isinstance(value, str):
+            return None
+        try:
+            normalized = value.replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(normalized)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except Exception:
+            return None
+
+    def _panel_freshness_meta(self, panel: str, cached_meta: dict | None, now: datetime) -> dict:
+        policy = self._panel_policy(panel)
+        fresh_ttl = policy["fresh_ttl_seconds"]
+        stale_ttl = policy["stale_ttl_seconds"]
+        cached_at = self._parse_datetime((cached_meta or {}).get("cached_at"))
+        age_seconds = None
+        if cached_at is not None:
+            age_seconds = max(0, int((now - cached_at).total_seconds()))
+
+        freshness_status = "fresh"
+        if age_seconds is not None and age_seconds > fresh_ttl:
+            freshness_status = "stale"
+        if age_seconds is not None and age_seconds > fresh_ttl + stale_ttl:
+            freshness_status = "expired"
+
+        fresh_until = None
+        stale_until = None
+        if cached_at is not None:
+            fresh_until = (cached_at + timedelta(seconds=fresh_ttl)).isoformat()
+            stale_until = (cached_at + timedelta(seconds=fresh_ttl + stale_ttl)).isoformat()
+
+        return {
+            "fresh_ttl_seconds": fresh_ttl,
+            "stale_ttl_seconds": stale_ttl,
+            "age_seconds": age_seconds,
+            "freshness_status": freshness_status,
+            "fresh_until": fresh_until,
+            "stale_while_revalidate_until": stale_until,
+            "revalidate_recommended": freshness_status == "stale",
+        }
+
+    async def _panel_swr(
+        self,
+        symbol: str,
+        panel: str,
+        variant_key: str,
+        producer,
+    ) -> dict:
+        upper_symbol = str(symbol or "").upper()
+        cache_key = f"panel:{panel}:{upper_symbol}:{variant_key}"
+        policy = self._panel_policy(panel)
+        fresh_ttl = policy["fresh_ttl_seconds"]
+        stale_ttl = policy["stale_ttl_seconds"]
+        hard_ttl = fresh_ttl + stale_ttl
+        now = datetime.now(timezone.utc)
+
+        cached = await cache.get(cache_key)
+        if isinstance(cached, dict) and isinstance(cached.get("meta"), dict) and "data" in cached:
+            base_meta = dict(cached.get("meta") or {})
+            freshness = self._panel_freshness_meta(panel, base_meta, now)
+            if freshness["freshness_status"] != "expired":
+                meta = {
+                    **base_meta,
+                    **freshness,
+                    "cache_status": "hit_stale" if freshness["freshness_status"] == "stale" else "hit_fresh",
+                    "served_at": now.isoformat(),
+                }
+                return {"symbol": upper_symbol, "panel": panel, "data": cached.get("data"), "meta": meta}
+
+        built = await producer()
+        built_data = built.get("data") if isinstance(built, dict) else built
+        built_sources = built.get("sources") if isinstance(built, dict) else None
+        built_warnings = built.get("warnings") if isinstance(built, dict) else None
+        built_errors = built.get("provider_errors") if isinstance(built, dict) else None
+        built_tags = built.get("tags") if isinstance(built, dict) else None
+
+        stored_meta = {
+            "generated_at": now.isoformat(),
+            "cached_at": now.isoformat(),
+            "sources": built_sources if isinstance(built_sources, dict) else {},
+            "warnings": built_warnings if isinstance(built_warnings, list) else [],
+            "provider_errors": built_errors if isinstance(built_errors, list) else [],
+            "tags": built_tags if isinstance(built_tags, dict) else {},
+        }
+        freshness = self._panel_freshness_meta(panel, stored_meta, now)
+        response_meta = {
+            **stored_meta,
+            **freshness,
+            "cache_status": "miss",
+            "served_at": now.isoformat(),
+        }
+        await cache.set(cache_key, {"data": built_data, "meta": stored_meta}, ttl_seconds=hard_ttl)
+        return {"symbol": upper_symbol, "panel": panel, "data": built_data, "meta": response_meta}
+
+    def _collect_source_warnings(self, source_meta_by_key: dict[str, dict]) -> list[dict[str, str]]:
+        warnings: list[dict[str, str]] = []
+        for key, meta in source_meta_by_key.items():
+            if not isinstance(meta, dict):
+                continue
+            if meta.get("fallback_used"):
+                source = meta.get("source") or "fallback"
+                warnings.append({"section": key, "message": f"Fallback provider path used. Current source: {source}."})
+        return warnings
 
     def _yahoo_provider(self) -> YahooFinanceProvider | None:
         for provider in self.providers:
@@ -1283,6 +1407,664 @@ class StockService:
             "relative_valuation": relative_valuation,
         }
 
+    def _normalize_mode(self, mode: str | None) -> str:
+        return "beginner" if str(mode or "").lower() == "beginner" else "pro"
+
+    def _normalize_relevance_view(self, view: str | None) -> str:
+        normalized = str(view or "long_term").strip().lower()
+        if normalized in {"swing", "swing_trading", "swing-trading"}:
+            return "swing"
+        if normalized in {"dividend", "income", "dividend_income"}:
+            return "dividend"
+        return "long_term"
+
+    def _market_scope_from_symbol(self, symbol: str) -> str:
+        return "india" if self._is_india_symbol(symbol) else "us"
+
+    def _section_priorities(self, mode: str, view: str, market: str) -> list[dict]:
+        if mode == "beginner":
+            priorities = [
+                ("price", "Price & trend", 100),
+                ("risk", "Risk summary", 96),
+                ("valuation", "Valuation verdict", 92),
+                ("profitability", "Business quality", 88),
+                ("news", "News sentiment", 84),
+                ("actions", "What to watch next", 80),
+            ]
+        else:
+            priorities = [
+                ("price", "Price/volume", 100),
+                ("ratios", "Ratios dashboard", 96),
+                ("financials", "Financial statements", 92),
+                ("valuation", "Valuation engine", 90),
+                ("peers", "Peers & benchmark", 88),
+                ("events", "Events / corporate actions", 84),
+                ("news", "News & sentiment", 80),
+            ]
+        if view == "dividend":
+            priorities.insert(2, ("income", "Dividend profile", 94))
+        if market == "india":
+            priorities.append(("india_context", "India-specific context", 82))
+        return [{"id": item_id, "label": label, "priority": score} for item_id, label, score in priorities]
+
+    def _materiality_ranking(
+        self,
+        symbol: str,
+        profile: dict,
+        market_data: dict,
+        ratios: dict,
+        benchmark: dict | None,
+        mode: str,
+        view: str,
+    ) -> list[dict]:
+        company_pe = self._as_number(ratios.get("pe"))
+        company_roe = self._as_number(ratios.get("roe"))
+        company_growth = self._normalize_rate(ratios.get("revenue_growth"))
+        company_margin = self._normalize_rate(ratios.get("profit_margin"))
+        company_de = self._as_number(ratios.get("debt_to_equity"))
+        company_beta = self._as_number(ratios.get("beta"))
+        company_dividend = self._normalize_rate(ratios.get("dividend_yield"))
+        perf = market_data.get("changes_percent") if isinstance(market_data, dict) else {}
+        perf_1m = self._as_number((perf or {}).get("1m"))
+        perf_1y = self._as_number((perf or {}).get("1y"))
+
+        benchmark = benchmark or {}
+        benchmark_pe = self._as_number(benchmark.get("sector_median_pe"))
+        benchmark_roe = self._as_number(benchmark.get("sector_median_roe"))
+        benchmark_growth = self._as_number(benchmark.get("sector_median_revenue_growth"))
+
+        weights_by_view = {
+            "long_term": {
+                "roe": 28,
+                "growth": 24,
+                "valuation_pe": 18,
+                "debt_to_equity": 16,
+                "margin": 16,
+                "beta": 8,
+                "trend_1y": 10,
+            },
+            "swing": {
+                "trend_1m": 28,
+                "trend_1y": 16,
+                "beta": 14,
+                "valuation_pe": 8,
+                "roe": 8,
+                "growth": 10,
+                "margin": 8,
+                "debt_to_equity": 8,
+            },
+            "dividend": {
+                "dividend_yield": 26,
+                "valuation_pe": 14,
+                "debt_to_equity": 20,
+                "margin": 16,
+                "roe": 14,
+                "beta": 8,
+                "trend_1y": 8,
+            },
+        }
+        weights = weights_by_view.get(view, weights_by_view["long_term"])
+
+        sector = str(profile.get("sector") or "").lower()
+        if "financial" in sector and "debt_to_equity" in weights:
+            # D/E is less comparable for banks/NBFCs; reduce overemphasis.
+            weights = dict(weights)
+            weights["debt_to_equity"] = max(4, int(weights["debt_to_equity"] * 0.35))
+            weights["roe"] = weights.get("roe", 0) + 6
+
+        candidates = [
+            {
+                "key": "valuation_pe",
+                "label": "Valuation (P/E)",
+                "category": "valuation",
+                "value": company_pe,
+                "unit": "x",
+                "benchmark_value": benchmark_pe,
+                "benchmark_label": "Sector median P/E",
+                "higher_is_better": False,
+                "base_weight": weights.get("valuation_pe", 0),
+                "reason_template": "P/E vs sector median helps judge valuation stretch.",
+            },
+            {
+                "key": "roe",
+                "label": "ROE",
+                "category": "profitability",
+                "value": company_roe,
+                "unit": "%",
+                "scale_percent": True,
+                "benchmark_value": benchmark_roe,
+                "benchmark_label": "Sector median ROE",
+                "higher_is_better": True,
+                "base_weight": weights.get("roe", 0),
+                "reason_template": "ROE reflects how efficiently management uses equity capital.",
+            },
+            {
+                "key": "growth",
+                "label": "Revenue Growth (YoY)",
+                "category": "growth",
+                "value": company_growth,
+                "unit": "%",
+                "scale_percent": True,
+                "benchmark_value": benchmark_growth,
+                "benchmark_label": "Sector median growth",
+                "higher_is_better": True,
+                "base_weight": weights.get("growth", 0),
+                "reason_template": "Revenue growth is a core signal for durability and market share momentum.",
+            },
+            {
+                "key": "margin",
+                "label": "Profit Margin",
+                "category": "profitability",
+                "value": company_margin,
+                "unit": "%",
+                "scale_percent": True,
+                "benchmark_value": None,
+                "benchmark_label": None,
+                "higher_is_better": True,
+                "base_weight": weights.get("margin", 0),
+                "reason_template": "Margins show pricing power and operating discipline.",
+            },
+            {
+                "key": "debt_to_equity",
+                "label": "Debt/Equity",
+                "category": "risk",
+                "value": company_de,
+                "unit": "x",
+                "benchmark_value": None,
+                "benchmark_label": None,
+                "higher_is_better": False,
+                "base_weight": weights.get("debt_to_equity", 0),
+                "reason_template": "Leverage can amplify upside and downside; lower is usually safer.",
+            },
+            {
+                "key": "beta",
+                "label": "Beta",
+                "category": "risk",
+                "value": company_beta,
+                "unit": "x",
+                "benchmark_value": None,
+                "benchmark_label": None,
+                "higher_is_better": False,
+                "base_weight": weights.get("beta", 0),
+                "reason_template": "Beta estimates sensitivity to market moves and short-term volatility.",
+            },
+            {
+                "key": "trend_1m",
+                "label": "Price Change (1M)",
+                "category": "momentum",
+                "value": perf_1m,
+                "unit": "%",
+                "benchmark_value": None,
+                "benchmark_label": None,
+                "higher_is_better": True,
+                "base_weight": weights.get("trend_1m", 0),
+                "reason_template": "Recent trend helps confirm momentum and timing context.",
+            },
+            {
+                "key": "trend_1y",
+                "label": "Price Change (1Y)",
+                "category": "momentum",
+                "value": perf_1y,
+                "unit": "%",
+                "benchmark_value": None,
+                "benchmark_label": None,
+                "higher_is_better": True,
+                "base_weight": weights.get("trend_1y", 0),
+                "reason_template": "Longer trend indicates whether the stock is compounding or mean-reverting.",
+            },
+            {
+                "key": "dividend_yield",
+                "label": "Dividend Yield",
+                "category": "income",
+                "value": company_dividend,
+                "unit": "%",
+                "scale_percent": True,
+                "benchmark_value": None,
+                "benchmark_label": None,
+                "higher_is_better": True,
+                "base_weight": weights.get("dividend_yield", 0),
+                "reason_template": "Yield matters most when screening for income-oriented strategies.",
+            },
+        ]
+
+        ranked: list[dict] = []
+        for item in candidates:
+            value = self._as_number(item.get("value"))
+            if value is None:
+                continue
+            benchmark_value = self._as_number(item.get("benchmark_value"))
+            delta_percent = None
+            if benchmark_value not in (None, 0):
+                delta_percent = ((value - benchmark_value) / abs(benchmark_value)) * 100
+            normalized_magnitude = 0.0
+            if delta_percent is not None:
+                normalized_magnitude = min(100.0, abs(delta_percent))
+            else:
+                normalized_magnitude = min(
+                    100.0,
+                    abs((value * 100) if item.get("unit") == "%" and item.get("scale_percent") else value),
+                )
+            score = float(item.get("base_weight") or 0) + normalized_magnitude * 0.35
+            if item.get("category") == "risk" and view == "swing":
+                score += 4
+            verdict = "neutral"
+            higher_is_better = bool(item.get("higher_is_better"))
+            if delta_percent is not None:
+                strong = delta_percent > 10 if higher_is_better else delta_percent < -10
+                weak = delta_percent < -10 if higher_is_better else delta_percent > 10
+            else:
+                strong = False
+                weak = False
+                if item["key"] == "debt_to_equity" and value > 2.0:
+                    weak = True
+                if item["key"] == "debt_to_equity" and value <= 1.0:
+                    strong = True
+                if item["key"] == "beta" and value > 1.5:
+                    weak = True
+                if item["key"] == "beta" and value < 0.9:
+                    strong = True
+            if strong:
+                verdict = "strong"
+            elif weak:
+                verdict = "watch"
+
+            display_value = value
+            if item.get("scale_percent"):
+                display_value = value * 100
+
+            ranked.append(
+                {
+                    "key": item["key"],
+                    "label": item["label"],
+                    "category": item["category"],
+                    "value": display_value,
+                    "unit": item.get("unit"),
+                    "benchmark_value": (benchmark_value * 100 if item.get("scale_percent") and benchmark_value is not None else benchmark_value),
+                    "benchmark_label": item.get("benchmark_label"),
+                    "delta_percent": delta_percent,
+                    "priority_score": round(score, 2),
+                    "importance": "high" if score >= 40 else "medium" if score >= 22 else "low",
+                    "verdict": verdict,
+                    "why_it_matters": item.get("reason_template"),
+                }
+            )
+
+        ranked.sort(key=lambda row: (-float(row.get("priority_score") or 0.0), str(row.get("label") or "")))
+        return ranked[: (6 if mode == "beginner" else 10)]
+
+    def _build_relevance_payload_from_context(
+        self,
+        symbol: str,
+        profile: dict,
+        market_data: dict,
+        ratios: dict,
+        benchmark: dict | None,
+        mode: str,
+        view: str,
+    ) -> dict:
+        market = self._market_scope_from_symbol(symbol)
+        materiality = self._materiality_ranking(
+            symbol=symbol,
+            profile=profile,
+            market_data=market_data,
+            ratios=ratios,
+            benchmark=benchmark,
+            mode=mode,
+            view=view,
+        )
+        relevance_filters = [
+            {
+                "id": "long_term",
+                "label": "Long-term investor",
+                "active": view == "long_term",
+                "description": "Prioritizes durability, growth quality, profitability, and valuation context.",
+            },
+            {
+                "id": "swing",
+                "label": "Swing trader",
+                "active": view == "swing",
+                "description": "Prioritizes recent trend, volatility, and momentum/risk context.",
+            },
+            {
+                "id": "dividend",
+                "label": "Dividend investor",
+                "active": view == "dividend",
+                "description": "Prioritizes yield, balance-sheet safety, and cash generation quality.",
+            },
+        ]
+        return {
+            "mode": mode,
+            "view": view,
+            "market": market,
+            "sector": profile.get("sector"),
+            "industry": profile.get("industry"),
+            "section_priorities": self._section_priorities(mode, view, market),
+            "materiality_ranking": materiality,
+            "headline_metrics": materiality[:3],
+            "relevance_filters": relevance_filters,
+        }
+
+    async def _build_price_panel(self, symbol: str, period: str = "6mo") -> dict:
+        upper_symbol = symbol.upper()
+        quote, quote_meta = await self._cached_provider_call_with_meta(f"meta:quote:{upper_symbol}", 60, "get_quote", symbol)
+        profile, profile_meta = await self._cached_provider_call_with_meta(f"meta:profile:{upper_symbol}", 900, "get_profile", symbol)
+        history, history_meta = await self._cached_provider_call_with_meta(f"meta:history:{upper_symbol}:{period}", 300, "get_history", symbol, period)
+        history_5y, history_5y_meta = await self._cached_provider_call_with_meta(f"meta:history:{upper_symbol}:5y", 300, "get_history", symbol, "5y")
+
+        safe_history = [row for row in (history or []) if isinstance(row, dict) and self._is_finite_number(row.get("close")) and self._is_finite_number(row.get("volume"))]
+        safe_history_5y = [
+            row
+            for row in (history_5y or [])
+            if isinstance(row, dict) and self._is_finite_number(row.get("close")) and self._is_finite_number(row.get("volume"))
+        ]
+        latest_row = safe_history_5y[-1] if safe_history_5y else {}
+        changes_percent = {
+            "1d": self._change_for_offset(safe_history_5y, 1),
+            "1w": self._change_for_offset(safe_history_5y, 5),
+            "1m": self._change_for_offset(safe_history_5y, 21),
+            "1y": self._change_for_offset(safe_history_5y, 252),
+            "5y": self._change_for_offset(safe_history_5y, 1260),
+        }
+        ohlc = {
+            "open": self._as_number(latest_row.get("open") if isinstance(latest_row, dict) else None) or self._as_number(quote.get("open")),
+            "high": self._as_number(latest_row.get("high") if isinstance(latest_row, dict) else None) or self._as_number(quote.get("high")),
+            "low": self._as_number(latest_row.get("low") if isinstance(latest_row, dict) else None) or self._as_number(quote.get("low")),
+            "close": self._as_number(latest_row.get("close") if isinstance(latest_row, dict) else None) or self._as_number(quote.get("close")) or self._as_number(quote.get("price")),
+            "adjusted_close": self._as_number(latest_row.get("adj_close") if isinstance(latest_row, dict) else None),
+        }
+        market_data = {
+            "live_price": self._as_number(quote.get("price")),
+            "changes_percent": changes_percent,
+            "volume": self._as_number(quote.get("volume")) or self._as_number(latest_row.get("volume") if isinstance(latest_row, dict) else None),
+            "market_cap": self._as_number(quote.get("market_cap")),
+            "week_52_high": self._as_number(profile.get("week_52_high")),
+            "week_52_low": self._as_number(profile.get("week_52_low")),
+            "beta": self._as_number(profile.get("beta")),
+        }
+        source_meta = {
+            "quote": {**(quote_meta or {}), "ttl_seconds": 60},
+            "profile": {**(profile_meta or {}), "ttl_seconds": 900},
+            f"history_{period}": {**(history_meta or {}), "ttl_seconds": 300},
+            "history_5y": {**(history_5y_meta or {}), "ttl_seconds": 300},
+        }
+        return {
+            "data": {
+                "quote": quote,
+                "history_period": period,
+                "history": safe_history,
+                "ohlc": ohlc,
+                "market_data": market_data,
+            },
+            "sources": source_meta,
+            "warnings": self._collect_source_warnings(source_meta),
+        }
+
+    async def _build_financials_panel(self, symbol: str, years: int = 10) -> dict:
+        upper_symbol = symbol.upper()
+        financials, financials_meta = await self._cached_provider_call_with_meta(
+            f"meta:financials:{upper_symbol}:{years}",
+            6 * 3600,
+            "get_financials",
+            symbol,
+            years,
+        )
+        source_meta = {"financials": {**(financials_meta or {}), "ttl_seconds": 6 * 3600}}
+        return {"data": financials, "sources": source_meta, "warnings": self._collect_source_warnings(source_meta)}
+
+    async def _build_ratios_panel(self, symbol: str, years: int = 10) -> dict:
+        upper_symbol = symbol.upper()
+        quote, quote_meta = await self._cached_provider_call_with_meta(f"meta:quote:{upper_symbol}", 60, "get_quote", symbol)
+        profile, profile_meta = await self._cached_provider_call_with_meta(f"meta:profile:{upper_symbol}", 900, "get_profile", symbol)
+        try:
+            financials, financials_meta = await self._cached_provider_call_with_meta(
+                f"meta:financials:{upper_symbol}:{years}", 6 * 3600, "get_financials", symbol, years
+            )
+        except HTTPException:
+            financials = {"years": []}
+            financials_meta = {"source": None, "fallback_used": True, "provider_errors": ["financials unavailable"], "attempted_providers": []}
+
+        ratio_dashboard = self._build_ratio_dashboard(quote, profile, financials)
+        profitability = ratio_dashboard.get("profitability", {}) if isinstance(ratio_dashboard, dict) else {}
+        solvency = ratio_dashboard.get("solvency", {}) if isinstance(ratio_dashboard, dict) else {}
+        normalized_de = self._as_number(solvency.get("debt_to_equity"))
+        if normalized_de is None:
+            profile_de = self._as_number(profile.get("debt_to_equity"))
+            if profile_de is not None:
+                normalized_de = profile_de / 100 if abs(profile_de) > 10 else profile_de
+        ratios = {
+            "pe": self._as_number(profile.get("trailing_pe")),
+            "pb": self._as_number(profile.get("pb")),
+            "peg": self._as_number(profile.get("peg")),
+            "roe": self._as_number(profitability.get("roe")) if profitability.get("roe") is not None else self._normalize_rate(profile.get("roe")),
+            "roce": self._as_number(profitability.get("roce")) if profitability.get("roce") is not None else self._normalize_rate(profile.get("roce")),
+            "debt_to_equity": normalized_de,
+            "profit_margin": self._as_number(profitability.get("net_margin")) if profitability.get("net_margin") is not None else self._normalize_rate(profile.get("profit_margin")),
+            "revenue_growth": self._normalize_rate(profile.get("revenue_growth")),
+            "dividend_yield": self._normalize_rate(profile.get("dividend_yield")),
+            "eps": self._as_number(profile.get("eps")),
+            "book_value": self._as_number(profile.get("book_value")),
+            "beta": self._as_number(profile.get("beta")),
+        }
+        source_meta = {
+            "quote": {**(quote_meta or {}), "ttl_seconds": 60},
+            "profile": {**(profile_meta or {}), "ttl_seconds": 900},
+            "financials": {**(financials_meta or {}), "ttl_seconds": 6 * 3600},
+        }
+        return {
+            "data": {"ratios": ratios, "ratio_dashboard": ratio_dashboard},
+            "sources": source_meta,
+            "warnings": self._collect_source_warnings(source_meta),
+        }
+
+    async def _build_peers_panel(self, symbol: str) -> dict:
+        upper_symbol = symbol.upper()
+        quote, quote_meta = await self._cached_provider_call_with_meta(f"meta:quote:{upper_symbol}", 60, "get_quote", symbol)
+        profile, profile_meta = await self._cached_provider_call_with_meta(f"meta:profile:{upper_symbol}", 900, "get_profile", symbol)
+        peer_snapshot = await self._dashboard_peer_snapshot(symbol, quote, profile)
+        source_meta = {"quote": {**(quote_meta or {}), "ttl_seconds": 60}, "profile": {**(profile_meta or {}), "ttl_seconds": 900}}
+        return {"data": peer_snapshot, "sources": source_meta, "warnings": self._collect_source_warnings(source_meta)}
+
+    async def _build_events_panel(self, symbol: str) -> dict:
+        event_feed = await self._event_feed(symbol)
+        return {
+            "data": event_feed,
+            "sources": {"events": {"source": event_feed.get("source"), "fallback_used": False, "ttl_seconds": 600}},
+            "warnings": [],
+        }
+
+    async def _build_news_panel(self, symbol: str) -> dict:
+        summary = await news_service.summarize(symbol)
+        items: list[dict] = []
+        errors: list[str] = []
+        try:
+            items = await news_service.fetch_news(symbol)
+        except Exception as exc:
+            errors.append(f"news_feed: {exc}")
+        return {
+            "data": {"summary": summary, "items": items[:10]},
+            "sources": {"news": {"source": "yahoo", "fallback_used": False, "ttl_seconds": 300}},
+            "warnings": [],
+            "provider_errors": errors,
+        }
+
+    async def _build_summary_panel(self, symbol: str, mode: str = "pro") -> dict:
+        mode = self._normalize_mode(mode)
+        price_panel, ratios_panel, peers_panel = await asyncio.gather(
+            self._build_price_panel(symbol, period="6mo"),
+            self._build_ratios_panel(symbol, years=10),
+            self._build_peers_panel(symbol),
+        )
+        quote = ((price_panel.get("data") or {}).get("quote") or {}) if isinstance(price_panel, dict) else {}
+        market_data = ((price_panel.get("data") or {}).get("market_data") or {}) if isinstance(price_panel, dict) else {}
+        ratios_bundle = (ratios_panel.get("data") or {}) if isinstance(ratios_panel, dict) else {}
+        ratios = ratios_bundle.get("ratios") or {}
+        ratio_dashboard = ratios_bundle.get("ratio_dashboard") or {}
+        profile, profile_meta = await self._cached_provider_call_with_meta(f"meta:profile:{symbol.upper()}", 900, "get_profile", symbol)
+        benchmark = ((peers_panel.get("data") or {}).get("benchmark") or {}) if isinstance(peers_panel, dict) else {}
+        relevance = self._build_relevance_payload_from_context(
+            symbol=symbol,
+            profile=profile,
+            market_data=market_data,
+            ratios=ratios,
+            benchmark=benchmark,
+            mode=mode,
+            view="long_term",
+        )
+        summary_data = {
+            "quote": quote,
+            "profile": {
+                "symbol": profile.get("symbol"),
+                "name": profile.get("name"),
+                "sector": profile.get("sector"),
+                "industry": profile.get("industry"),
+                "country": profile.get("country"),
+                "exchange": profile.get("exchange"),
+            },
+            "market_data": market_data,
+            "ratios": ratios,
+            "ratio_dashboard": ratio_dashboard if mode == "pro" else None,
+            "financial_highlights": {
+                "sector": profile.get("sector"),
+                "industry": profile.get("industry"),
+                "market_cap": quote.get("market_cap"),
+            },
+            "benchmark_context": benchmark,
+            "materiality": relevance.get("materiality_ranking"),
+            "section_priorities": relevance.get("section_priorities"),
+        }
+        source_meta = {
+            **(price_panel.get("sources") or {}),
+            **(ratios_panel.get("sources") or {}),
+            **(peers_panel.get("sources") or {}),
+            "profile": {**(profile_meta or {}), "ttl_seconds": 900},
+        }
+        warnings = []
+        warnings.extend(price_panel.get("warnings") or [])
+        warnings.extend(ratios_panel.get("warnings") or [])
+        warnings.extend(peers_panel.get("warnings") or [])
+        return {"data": summary_data, "sources": source_meta, "warnings": warnings}
+
+    async def _build_benchmark_context(self, symbol: str) -> dict:
+        upper_symbol = symbol.upper()
+        quote, quote_meta = await self._cached_provider_call_with_meta(f"meta:quote:{upper_symbol}", 60, "get_quote", symbol)
+        profile, profile_meta = await self._cached_provider_call_with_meta(f"meta:profile:{upper_symbol}", 900, "get_profile", symbol)
+        peer_snapshot = await self._dashboard_peer_snapshot(symbol, quote, profile)
+        relative = await self._peer_snapshot(symbol, profile, self._as_number(quote.get("price")))
+        data = {
+            "symbol": upper_symbol,
+            "market": self._market_scope_from_symbol(symbol),
+            "sector": profile.get("sector"),
+            "industry": profile.get("industry"),
+            "company": {
+                "price": self._as_number(quote.get("price")),
+                "market_cap": self._as_number(quote.get("market_cap")),
+                "pe": self._as_number(profile.get("trailing_pe")),
+                "roe": self._normalize_rate(profile.get("roe")),
+                "revenue_growth": self._normalize_rate(profile.get("revenue_growth")),
+            },
+            "peer_snapshot": peer_snapshot,
+            "relative_valuation": relative.get("industry_multiple_comparison") if isinstance(relative, dict) else None,
+            "peer_medians": relative.get("peer_medians") if isinstance(relative, dict) else None,
+        }
+        source_meta = {"quote": {**(quote_meta or {}), "ttl_seconds": 60}, "profile": {**(profile_meta or {}), "ttl_seconds": 900}}
+        return {"data": data, "sources": source_meta, "warnings": self._collect_source_warnings(source_meta)}
+
+    async def _build_relevance_context(self, symbol: str, mode: str = "beginner", view: str = "long_term") -> dict:
+        mode = self._normalize_mode(mode)
+        view = self._normalize_relevance_view(view)
+        upper_symbol = symbol.upper()
+        quote, quote_meta = await self._cached_provider_call_with_meta(f"meta:quote:{upper_symbol}", 60, "get_quote", symbol)
+        profile, profile_meta = await self._cached_provider_call_with_meta(f"meta:profile:{upper_symbol}", 900, "get_profile", symbol)
+        try:
+            financials, financials_meta = await self._cached_provider_call_with_meta(f"meta:financials:{upper_symbol}:10", 6 * 3600, "get_financials", symbol, 10)
+        except HTTPException:
+            financials = {"years": []}
+            financials_meta = {"source": None, "fallback_used": True, "provider_errors": ["financials unavailable"], "attempted_providers": []}
+        history_5y, history_meta = await self._cached_provider_call_with_meta(f"meta:history:{upper_symbol}:5y", 300, "get_history", symbol, "5y")
+        safe_history_5y = [
+            row
+            for row in (history_5y or [])
+            if isinstance(row, dict) and self._is_finite_number(row.get("close")) and self._is_finite_number(row.get("volume"))
+        ]
+        market_data = {
+            "changes_percent": {
+                "1d": self._change_for_offset(safe_history_5y, 1),
+                "1w": self._change_for_offset(safe_history_5y, 5),
+                "1m": self._change_for_offset(safe_history_5y, 21),
+                "1y": self._change_for_offset(safe_history_5y, 252),
+                "5y": self._change_for_offset(safe_history_5y, 1260),
+            },
+            "market_cap": self._as_number(quote.get("market_cap")),
+            "live_price": self._as_number(quote.get("price")),
+            "volume": self._as_number(quote.get("volume")),
+        }
+        ratio_dashboard = self._build_ratio_dashboard(quote, profile, financials)
+        profitability = ratio_dashboard.get("profitability", {}) if isinstance(ratio_dashboard, dict) else {}
+        solvency = ratio_dashboard.get("solvency", {}) if isinstance(ratio_dashboard, dict) else {}
+        ratios = {
+            "pe": self._as_number(profile.get("trailing_pe")),
+            "roe": profitability.get("roe") if profitability.get("roe") is not None else self._normalize_rate(profile.get("roe")),
+            "revenue_growth": self._normalize_rate(profile.get("revenue_growth")),
+            "profit_margin": profitability.get("net_margin") if profitability.get("net_margin") is not None else self._normalize_rate(profile.get("profit_margin")),
+            "debt_to_equity": solvency.get("debt_to_equity"),
+            "beta": self._as_number(profile.get("beta")),
+            "dividend_yield": self._normalize_rate(profile.get("dividend_yield")),
+        }
+        peer_snapshot = await self._dashboard_peer_snapshot(symbol, quote, profile)
+        benchmark = peer_snapshot.get("benchmark") if isinstance(peer_snapshot, dict) else {}
+        data = self._build_relevance_payload_from_context(
+            symbol=symbol,
+            profile=profile,
+            market_data=market_data,
+            ratios=ratios,
+            benchmark=benchmark,
+            mode=mode,
+            view=view,
+        )
+        data["benchmark_context"] = benchmark
+        source_meta = {
+            "quote": {**(quote_meta or {}), "ttl_seconds": 60},
+            "profile": {**(profile_meta or {}), "ttl_seconds": 900},
+            "history_5y": {**(history_meta or {}), "ttl_seconds": 300},
+            "financials": {**(financials_meta or {}), "ttl_seconds": 6 * 3600},
+        }
+        return {"data": data, "sources": source_meta, "warnings": self._collect_source_warnings(source_meta)}
+
+    async def panel(self, symbol: str, panel: str, mode: str = "pro", period: str = "6mo", years: int = 10) -> dict:
+        panel_key = str(panel or "").strip().lower()
+        mode = self._normalize_mode(mode)
+        period = str(period or "6mo").strip().lower()
+        years = max(3, min(15, int(years)))
+
+        if panel_key == "price":
+            return await self._panel_swr(symbol, "price", f"period={period}", lambda: self._build_price_panel(symbol, period=period))
+        if panel_key == "summary":
+            return await self._panel_swr(symbol, "summary", f"mode={mode}", lambda: self._build_summary_panel(symbol, mode=mode))
+        if panel_key == "news":
+            return await self._panel_swr(symbol, "news", "default", lambda: self._build_news_panel(symbol))
+        if panel_key == "financials":
+            return await self._panel_swr(symbol, "financials", f"years={years}", lambda: self._build_financials_panel(symbol, years=years))
+        if panel_key == "ratios":
+            return await self._panel_swr(symbol, "ratios", f"years={years}", lambda: self._build_ratios_panel(symbol, years=years))
+        if panel_key == "peers":
+            return await self._panel_swr(symbol, "peers", "default", lambda: self._build_peers_panel(symbol))
+        if panel_key == "events":
+            return await self._panel_swr(symbol, "events", "default", lambda: self._build_events_panel(symbol))
+        raise HTTPException(status_code=404, detail=f"Unsupported panel '{panel}'.")
+
+    async def benchmark_context(self, symbol: str) -> dict:
+        return await self._panel_swr(symbol, "benchmark", "default", lambda: self._build_benchmark_context(symbol))
+
+    async def relevance_context(self, symbol: str, mode: str = "beginner", view: str = "long_term") -> dict:
+        normalized_mode = self._normalize_mode(mode)
+        normalized_view = self._normalize_relevance_view(view)
+        return await self._panel_swr(
+            symbol,
+            "relevance",
+            f"mode={normalized_mode}:view={normalized_view}",
+            lambda: self._build_relevance_context(symbol, mode=normalized_mode, view=normalized_view),
+        )
+
     async def _from_providers(self, method_name: str, *args, **kwargs):
         errors: list[str] = []
         for provider in self.providers:
@@ -1419,7 +2201,8 @@ class StockService:
         )
         return self._sanitize_json(data)
 
-    async def dashboard(self, symbol: str) -> dict:
+    async def dashboard(self, symbol: str, mode: str = "pro") -> dict:
+        mode = self._normalize_mode(mode)
         upper_symbol = symbol.upper()
 
         quote, quote_meta = await self._cached_provider_call_with_meta(f"meta:quote:{upper_symbol}", 60, "get_quote", symbol)
@@ -1526,9 +2309,11 @@ class StockService:
             "roce": self._as_number(ratios.get("roce")),
             "debt_to_equity": self._as_number(ratios.get("debt_to_equity")),
         }
-        valuation_engine = await self._build_valuation_engine(symbol, quote, profile, financial_statements)
-        peer_snapshot = await self._dashboard_peer_snapshot(symbol, quote, profile)
-        event_feed = await self._event_feed(symbol)
+        peer_task = asyncio.create_task(self._dashboard_peer_snapshot(symbol, quote, profile))
+        event_task = asyncio.create_task(self._event_feed(symbol))
+        valuation_task = asyncio.create_task(self._build_valuation_engine(symbol, quote, profile, financial_statements)) if mode == "pro" else None
+        peer_snapshot, event_feed = await asyncio.gather(peer_task, event_task)
+        valuation_engine = await valuation_task if valuation_task is not None else None
         india_context = self._build_india_context(symbol, profile, financial_statements, ratio_dashboard, event_feed)
 
         backend_warnings: list[dict[str, str]] = []
@@ -1550,6 +2335,10 @@ class StockService:
                     }
                 )
 
+        omitted_sections = []
+        if mode != "pro":
+            omitted_sections = ["valuation_engine", "financial_statements.raw_heavy_payload"]
+
         dashboard = {
             "quote": quote,
             "profile": clean_profile,
@@ -1558,12 +2347,31 @@ class StockService:
             "history": history,
             "market_data": market_data,
             "ohlc": ohlc,
-            "financial_statements": financial_statements,
+            "financial_statements": financial_statements if mode == "pro" else None,
             "ratio_dashboard": ratio_dashboard,
             "valuation_engine": valuation_engine,
             "peer_snapshot": peer_snapshot,
             "event_feed": event_feed,
             "india_context": india_context,
+            "payload_profile": {
+                "mode": mode,
+                "included_sections": [
+                    "quote",
+                    "profile",
+                    "ratios",
+                    "financial_highlights",
+                    "history",
+                    "market_data",
+                    "ohlc",
+                    "ratio_dashboard",
+                    "peer_snapshot",
+                    "event_feed",
+                    "india_context",
+                    "data_sources",
+                ]
+                + (["financial_statements", "valuation_engine"] if mode == "pro" else []),
+                "omitted_sections": omitted_sections,
+            },
             "data_sources": {
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "panels": {
@@ -1572,6 +2380,12 @@ class StockService:
                     "history_6mo": {**history_meta, "ttl_seconds": 300},
                     "history_5y": {**history_5y_meta, "ttl_seconds": 300},
                     "financials": {**financials_meta, "ttl_seconds": 21600},
+                    "dashboard_payload": {
+                        "source": "aggregated",
+                        "fallback_used": False,
+                        "cache_status": "n/a",
+                        "ttl_seconds": 0,
+                    },
                     "events": {
                         "source": event_feed.get("source"),
                         "fallback_used": False,
@@ -1581,6 +2395,7 @@ class StockService:
                     },
                 },
                 "warnings": backend_warnings,
+                "payload_mode": mode,
             },
         }
         return self._sanitize_json(dashboard)

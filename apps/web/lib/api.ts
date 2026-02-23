@@ -92,7 +92,25 @@ export const api = {
     call<{ symbol: string; items: Array<{ date: string; open?: number; high?: number; low?: number; close: number; adj_close?: number; volume: number }> }>(
       `/stocks/${symbol}/history?period=${encodeURIComponent(period)}`
     ),
-  getDashboard: (symbol: string) => call<StockDashboard>(`/stocks/${symbol}/dashboard`),
+  getDashboard: (symbol: string, mode?: "beginner" | "pro") =>
+    call<StockDashboard>(`/stocks/${symbol}/dashboard${mode ? `?mode=${encodeURIComponent(mode)}` : ""}`),
+  getDashboardPanel: (symbol: string, panel: "price" | "summary" | "news" | "financials" | "ratios" | "peers" | "events", params?: { mode?: "beginner" | "pro"; period?: string; years?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.mode) qs.set("mode", params.mode);
+    if (params?.period) qs.set("period", params.period);
+    if (params?.years !== undefined) qs.set("years", String(params.years));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return call<{ symbol: string; panel: string; data: Record<string, unknown>; meta: Record<string, unknown> }>(`/stocks/${symbol}/panels/${panel}${suffix}`);
+  },
+  getBenchmarkContext: (symbol: string) =>
+    call<{ symbol: string; panel: string; data: Record<string, unknown>; meta: Record<string, unknown> }>(`/stocks/${symbol}/benchmark-context`),
+  getRelevanceContext: (symbol: string, params?: { mode?: "beginner" | "pro"; view?: "long_term" | "swing" | "dividend" }) => {
+    const qs = new URLSearchParams();
+    if (params?.mode) qs.set("mode", params.mode);
+    if (params?.view) qs.set("view", params.view);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return call<{ symbol: string; panel: string; data: Record<string, unknown>; meta: Record<string, unknown> }>(`/stocks/${symbol}/relevance${suffix}`);
+  },
   getSmartInsights: (symbol: string) => call<SmartInsightsData>(`/stocks/${symbol}/smart-insights`),
   getMarketHeatmap: (limit = 60) => call<MarketHeatmapData>(`/stocks/market-heatmap?limit=${Math.max(20, Math.min(200, limit))}`),
   explainMetric: (metric: string, value?: number, symbol?: string) =>

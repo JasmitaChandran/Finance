@@ -47,8 +47,33 @@ async def history(symbol: str, period: str = "6mo"):
 
 
 @router.get("/{symbol}/dashboard")
-async def dashboard(symbol: str):
-    return await stock_service.dashboard(symbol)
+async def dashboard(symbol: str, mode: str = Query(default="pro", max_length=20)):
+    return await stock_service.dashboard(symbol, mode=mode)
+
+
+@router.get("/{symbol}/panels/{panel}")
+async def dashboard_panel(
+    symbol: str,
+    panel: str,
+    mode: str = Query(default="pro", max_length=20),
+    period: str = Query(default="6mo", max_length=20),
+    years: int = Query(default=10, ge=3, le=15),
+):
+    return await stock_service.panel(symbol=symbol, panel=panel, mode=mode, period=period, years=years)
+
+
+@router.get("/{symbol}/benchmark-context")
+async def benchmark_context(symbol: str):
+    return await stock_service.benchmark_context(symbol)
+
+
+@router.get("/{symbol}/relevance")
+async def relevance_context(
+    symbol: str,
+    mode: str = Query(default="beginner", max_length=20),
+    view: str = Query(default="long_term", max_length=30),
+):
+    return await stock_service.relevance_context(symbol=symbol, mode=mode, view=view)
 
 
 @router.get("/{symbol}/financials")

@@ -891,7 +891,7 @@ export function StockDashboard() {
 
       try {
         const [dashResult, summaryResult, newsResult] = await Promise.allSettled([
-          api.getDashboard(upper),
+          api.getDashboard(upper, mode),
           api.getSummary(upper, mode),
           api.getNewsSummary(upper),
         ]);
