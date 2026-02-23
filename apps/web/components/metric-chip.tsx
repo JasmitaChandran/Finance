@@ -1,7 +1,7 @@
 "use client";
 
 import { Info } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "@/lib/api";
 
@@ -14,6 +14,7 @@ interface MetricChipProps {
 }
 
 export function MetricChip({ label, metricKey, value, symbol, rawValue }: MetricChipProps) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -47,12 +48,34 @@ export function MetricChip({ label, metricKey, value, symbol, rawValue }: Metric
     }
   }
 
+  useEffect(() => {
+    if (!open) return;
+
+    function onPointerDown(event: MouseEvent) {
+      const node = rootRef.current;
+      if (!node) return;
+      if (node.contains(event.target as Node)) return;
+      setOpen(false);
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+
+    window.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
   return (
-    <div className="relative self-start rounded-xl border border-borderGlass bg-card p-3 hover:bg-cardHover">
+    <div ref={rootRef} className="relative h-full min-h-[104px] rounded-xl border border-borderGlass bg-card p-3 hover:bg-cardHover">
       <div className="flex items-center justify-between gap-2">
-        <div>
+        <div className="min-w-0">
           <p className="text-xs uppercase tracking-wide text-textMuted">{label}</p>
-          <p className="mt-1 text-lg font-semibold">{value}</p>
+          <p className="mt-1 line-clamp-2 text-lg font-semibold">{value}</p>
         </div>
         <button onClick={toggleInsight} className="rounded-md p-2 text-textMuted transition hover:bg-bgSoft hover:text-textMain" aria-label={`Explain ${label}`}>
           <Info className="h-4 w-4" />
@@ -60,7 +83,7 @@ export function MetricChip({ label, metricKey, value, symbol, rawValue }: Metric
       </div>
 
       {open && (
-        <div className="mt-3 rounded-lg border border-borderGlass bg-bgSoft p-3 text-xs leading-relaxed text-textMuted">
+        <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 rounded-lg border border-borderGlass bg-card p-3 text-xs leading-relaxed text-textMuted shadow-glow">
           {loading && <p>Explaining this metric...</p>}
           {!loading && loadError && <p className="text-danger">{loadError}</p>}
           {!loading && insight && (

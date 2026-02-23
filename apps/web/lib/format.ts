@@ -27,6 +27,24 @@ export function formatLargeByCurrency(value?: number | null, currency?: string |
   }
 }
 
+export type CurrencyCompactMode = "intl" | "indian";
+
+export function formatIndianLakhCrore(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) return "-";
+  const abs = Math.abs(value);
+  const sign = value < 0 ? "-" : "";
+  if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)} cr`;
+  if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)} lakh`;
+  if (abs >= 1e3) return `${sign}₹${(abs / 1e3).toFixed(2)}k`;
+  return `${sign}₹${abs.toFixed(2)}`;
+}
+
+export function formatLargeByCurrencyMode(value?: number | null, currency?: string | null, mode: CurrencyCompactMode = "intl") {
+  if (currency === "INR" && mode === "indian") return formatIndianLakhCrore(value);
+  if (currency) return formatLargeByCurrency(value, currency);
+  return formatLarge(value);
+}
+
 export function ratioToPercent(value?: number | null) {
   if (value === undefined || value === null || Number.isNaN(value)) return "-";
   if (Math.abs(value) < 2) {
