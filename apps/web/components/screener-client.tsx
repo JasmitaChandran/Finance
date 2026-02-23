@@ -18,10 +18,11 @@ import {
 } from "recharts";
 
 import { api } from "@/lib/api";
-import { formatLarge } from "@/lib/format";
+import { formatCurrency, formatLarge, formatLargeByCurrency } from "@/lib/format";
 import type { ScreenerPreset, ScreenerRow, ScreenerRunMeta } from "@/lib/types";
 
 type ScreenerForm = {
+  market_scope: "global" | "us" | "india";
   min_market_cap_b: number;
   max_market_cap_b: number;
   min_pe: number;
@@ -59,6 +60,7 @@ type ScreenerForm = {
 };
 
 const defaultForm: ScreenerForm = {
+  market_scope: "global",
   min_market_cap_b: 5,
   max_market_cap_b: 5000,
   min_pe: 0,
@@ -183,6 +185,7 @@ function toDebtRatio(value: unknown): number {
 function payloadFromForm(form: ScreenerForm, symbols: string[], mode: "basic" | "pro") {
   const payload: Record<string, unknown> = {
     symbols,
+    market_scope: form.market_scope,
     min_market_cap: Math.max(0, form.min_market_cap_b) * 1_000_000_000,
     max_market_cap: Math.max(form.min_market_cap_b, form.max_market_cap_b) * 1_000_000_000,
     min_pe: Math.max(0, form.min_pe),
@@ -241,9 +244,15 @@ function payloadFromForm(form: ScreenerForm, symbols: string[], mode: "basic" | 
   return payload;
 }
 
-function guaranteedPayload(symbols: string[], universeLimit: number, resultLimit: number) {
+function guaranteedPayload(
+  symbols: string[],
+  universeLimit: number,
+  resultLimit: number,
+  marketScope: ScreenerForm["market_scope"] = "global",
+) {
   return {
     symbols,
+    market_scope: marketScope,
     breakout_only: false,
     volume_spike_only: false,
     magic_formula_only: false,
@@ -303,6 +312,9 @@ export function ScreenerClient() {
   const activeTags = useMemo(() => {
     const tags: Array<{ key: string; label: string }> = [];
 
+    if (form.market_scope !== defaultForm.market_scope) {
+      tags.push({ key: "market_scope", label: `Market ${form.market_scope === "india" ? "India (NSE/BSE)" : "US"}` });
+    }
     if (Math.abs(form.min_roe_pct - defaultForm.min_roe_pct) > 0.001) tags.push({ key: "min_roe_pct", label: `Min ROE > ${form.min_roe_pct}%` });
     if (Math.abs(form.min_revenue_growth_pct - defaultForm.min_revenue_growth_pct) > 0.001) {
       tags.push({ key: "min_revenue_growth_pct", label: `Revenue Growth > ${form.min_revenue_growth_pct}%` });
@@ -404,6 +416,8 @@ export function ScreenerClient() {
   function clearTag(key: string) {
     setForm((previous) => {
       switch (key) {
+        case "market_scope":
+          return { ...previous, market_scope: defaultForm.market_scope };
         case "min_roe_pct":
           return { ...previous, min_roe_pct: defaultForm.min_roe_pct };
         case "min_revenue_growth_pct":
@@ -444,6 +458,10 @@ export function ScreenerClient() {
         limit: previous.limit,
       };
 
+      if (typeof filters.market_scope === "string") {
+        const market = filters.market_scope.toLowerCase();
+        if (market === "global" || market === "us" || market === "india") next.market_scope = market;
+      }
       if (typeof filters.min_market_cap === "number") next.min_market_cap_b = filters.min_market_cap / 1_000_000_000;
       if (typeof filters.max_market_cap === "number") next.max_market_cap_b = filters.max_market_cap / 1_000_000_000;
       if (typeof filters.min_pe === "number") next.min_pe = filters.min_pe;
@@ -546,6 +564,7 @@ export function ScreenerClient() {
           parsedSymbols,
           parsedSymbols.length ? form.universe_limit : Math.min(form.universe_limit, 80),
           Math.min(form.limit, 80),
+          form.market_scope,
         ),
       );
       const guaranteedItems = guaranteedResponse.items || [];
@@ -579,6 +598,7 @@ export function ScreenerClient() {
               parsedSymbols,
               parsedSymbols.length ? form.universe_limit : Math.min(80, form.universe_limit),
               Math.min(80, form.limit),
+              form.market_scope,
             ),
           );
           const rescueItems = rescue.items || [];
@@ -731,10 +751,22 @@ export function ScreenerClient() {
           </div>
         )}
 
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <label className="text-xs text-textMuted xl:col-span-2">
             Universe symbols (comma separated). Leave blank to scan market universe.
             <input value={symbols} onChange={(event) => setSymbols(event.target.value)} className="mt-1 w-full rounded-xl border border-borderGlass bg-bgSoft px-3 py-2 text-sm" />
+          </label>
+          <label className="text-xs text-textMuted">
+            Market Scope
+            <select
+              value={form.market_scope}
+              onChange={(event) => setForm((previous) => ({ ...previous, market_scope: event.target.value as ScreenerForm["market_scope"] }))}
+              className="mt-1 w-full rounded-xl border border-borderGlass bg-bgSoft px-3 py-2 text-sm"
+            >
+              <option value="global">Global (US + India)</option>
+              <option value="us">US</option>
+              <option value="india">India (NSE/BSE)</option>
+            </select>
           </label>
           <label className="text-xs text-textMuted">
             Universe size
@@ -1045,8 +1077,8 @@ export function ScreenerClient() {
               return (
                 <tr key={row.symbol} className="border-t border-borderGlass text-textMuted">
                   <td className="px-4 py-3 font-medium text-textMain">{row.symbol}</td>
-                  <td className="px-4 py-3">{typeof row.price === "number" ? `$${row.price.toFixed(2)}` : "-"}</td>
-                  <td className="px-4 py-3">{typeof row.market_cap === "number" ? formatLarge(row.market_cap) : "-"}</td>
+                  <td className="px-4 py-3">{typeof row.price === "number" ? formatCurrency(row.price, row.currency || "USD") : "-"}</td>
+                  <td className="px-4 py-3">{typeof row.market_cap === "number" ? formatLargeByCurrency(row.market_cap, row.currency) : "-"}</td>
                   <td className="px-4 py-3">{asNumber(row.pe)}</td>
                   <td className={`px-4 py-3 ${toneClass(row.roe ?? null, 0.15, 0.08)}`}>{asPercentFromDecimal(row.roe)}</td>
                   <td className={`px-4 py-3 ${toneClass(row.revenue_growth ?? null, 0.1, 0.03)}`}>{asPercentFromDecimal(row.revenue_growth)}</td>
@@ -1055,7 +1087,7 @@ export function ScreenerClient() {
                   <td className={`px-4 py-3 ${toneClass(row.roic ?? null, 0.12, 0.08)}`}>{asPercentFromDecimal(row.roic)}</td>
                   <td className={`px-4 py-3 ${toneClass(row.revenue_cagr_3y ?? null, 0.1, 0.03)}`}>{asPercentFromDecimal(row.revenue_cagr_3y)}</td>
                   <td className={`px-4 py-3 ${toneClass(row.eps_cagr_5y ?? null, 0.1, 0.03)}`}>{asPercentFromDecimal(row.eps_cagr_5y)}</td>
-                  <td className="px-4 py-3">{typeof row.net_debt === "number" ? formatLarge(row.net_debt) : "-"}</td>
+                  <td className="px-4 py-3">{typeof row.net_debt === "number" ? formatLargeByCurrency(row.net_debt, row.currency) : "-"}</td>
                   <td className="px-4 py-3">{asNumber(row.ev_ebitda)}</td>
                   <td className={`px-4 py-3 ${toneClass(row.piotroski_score ?? null, 7, 4)}`}>{asNumber(row.piotroski_score, 0)}</td>
                   <td className={`px-4 py-3 ${toneClass(row.sharpe_ratio ?? null, 1, 0.5)}`}>{asNumber(row.sharpe_ratio)}</td>

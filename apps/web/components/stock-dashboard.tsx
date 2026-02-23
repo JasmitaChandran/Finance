@@ -14,7 +14,7 @@ import { useUI } from "@/components/providers";
 import { ValuationEnginePanel } from "@/components/valuation-engine-panel";
 import { VisualizationToolsPanel } from "@/components/visualization-tools-panel";
 import { api } from "@/lib/api";
-import { formatCurrency, formatLarge, ratioToPercent } from "@/lib/format";
+import { formatCurrency, formatLarge, formatLargeByCurrency, ratioToPercent } from "@/lib/format";
 import type { NewsSummary, StockDashboard as StockDashboardType, StockSummary } from "@/lib/types";
 
 type UniverseStock = {
@@ -307,7 +307,7 @@ export function StockDashboard() {
         </div>
         <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
           <p className="text-textMuted">Market Cap</p>
-          <p className="mt-1 font-semibold text-textMain">{formatLarge(marketData?.market_cap ?? dashboard?.quote.market_cap)}</p>
+          <p className="mt-1 font-semibold text-textMain">{formatLargeByCurrency(marketData?.market_cap ?? dashboard?.quote.market_cap, dashboard?.quote.currency)}</p>
         </div>
         <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
           <p className="text-textMuted">52-Week High / Low</p>
@@ -708,7 +708,7 @@ export function StockDashboard() {
 
               <div className="mt-4 space-y-3 text-sm">
                 <div className="flex items-center justify-between text-textMuted"><span>Price</span><span className="text-textMain">{formatCurrency(dashboard.quote.price, dashboard.quote.currency)}</span></div>
-                <div className="flex items-center justify-between text-textMuted"><span>Market Cap</span><span className="text-textMain">{formatLarge(dashboard.quote.market_cap as number)}</span></div>
+                <div className="flex items-center justify-between text-textMuted"><span>Market Cap</span><span className="text-textMain">{formatLargeByCurrency(dashboard.quote.market_cap as number, dashboard.quote.currency)}</span></div>
                 <div className="flex items-center justify-between text-textMuted"><span>1M Return</span><span className={oneMonthReturn !== null && oneMonthReturn >= 0 ? "text-success" : "text-danger"}>{formatSignedPercent(oneMonthReturn)}</span></div>
                 <div className="flex items-center justify-between text-textMuted"><span>6M Return</span><span className={sixMonthReturn !== null && sixMonthReturn >= 0 ? "text-success" : "text-danger"}>{formatSignedPercent(sixMonthReturn)}</span></div>
                 <div className="flex items-center justify-between text-textMuted"><span>Ann. Volatility</span><span className="text-textMain">{volatility === null ? "-" : `${volatility.toFixed(2)}%`}</span></div>

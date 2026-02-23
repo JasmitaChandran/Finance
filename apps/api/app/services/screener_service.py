@@ -39,6 +39,23 @@ class ScreenerService:
         "UNH",
         "BRK.B",
     ]
+    FALLBACK_SCREENABLE_SYMBOLS_INDIA = [
+        "RELIANCE.NS",
+        "TCS.NS",
+        "HDFCBANK.NS",
+        "ICICIBANK.NS",
+        "INFY.NS",
+        "ITC.NS",
+        "LT.NS",
+        "SBIN.NS",
+        "BHARTIARTL.NS",
+        "HINDUNILVR.NS",
+        "KOTAKBANK.NS",
+        "AXISBANK.NS",
+        "ASIANPAINT.NS",
+        "MARUTI.NS",
+        "BAJFINANCE.NS",
+    ]
 
     def _as_number(self, value: Any) -> float | None:
         try:
@@ -275,7 +292,7 @@ class ScreenerService:
 
     def _sanitize_symbol(self, symbol: str) -> str | None:
         value = str(symbol or "").strip().upper()
-        if not value or len(value) > 12:
+        if not value or len(value) > 18:
             return None
         if not value[0].isalpha():
             return None
@@ -285,7 +302,10 @@ class ScreenerService:
 
     def _is_common_equity_candidate(self, symbol: str, name: str | None) -> bool:
         # Keep universe focused on screenable common equities.
-        if len(symbol) > 6:
+        base_symbol = symbol
+        if symbol.endswith(".NS") or symbol.endswith(".BO"):
+            base_symbol = symbol[:-3]
+        if len(base_symbol) > 12:
             return False
         upper_name = str(name or "").upper()
         blocked_terms = (
@@ -304,15 +324,21 @@ class ScreenerService:
             return False
         return True
 
-    async def _default_symbols(self, limit: int) -> list[str]:
+    async def _default_symbols(self, limit: int, market_scope: str = "global") -> list[str]:
         safe_limit = max(80, min(1200, limit))
-        universe = await universe_service.list_stocks(query="", offset=0, limit=safe_limit)
+        universe = await universe_service.list_stocks(query="", market=market_scope, offset=0, limit=safe_limit)
         items = universe.get("items", [])
         clean_symbols: list[str] = []
         seen: set[str] = set()
 
         # Seed with liquid, reliable symbols so scans return usable matches quickly.
-        for seed in self.FALLBACK_SCREENABLE_SYMBOLS:
+        seed_list = self.FALLBACK_SCREENABLE_SYMBOLS
+        if market_scope in {"india", "nse", "bse"}:
+            seed_list = self.FALLBACK_SCREENABLE_SYMBOLS_INDIA
+        elif market_scope in {"global", "all", ""}:
+            seed_list = self.FALLBACK_SCREENABLE_SYMBOLS + self.FALLBACK_SCREENABLE_SYMBOLS_INDIA
+
+        for seed in seed_list:
             symbol = self._sanitize_symbol(seed)
             if not symbol or symbol in seen:
                 continue
@@ -336,7 +362,8 @@ class ScreenerService:
         if clean_symbols:
             return clean_symbols
 
-        return self.FALLBACK_SCREENABLE_SYMBOLS[:safe_limit]
+        fallback = seed_list or self.FALLBACK_SCREENABLE_SYMBOLS
+        return fallback[:safe_limit]
 
     def _apply_numeric_filter(self, value: float | None, minimum: float | None = None, maximum: float | None = None) -> bool:
         if minimum is not None and (value is None or value < minimum):
@@ -789,6 +816,9 @@ class ScreenerService:
         sort_by = str(filters.get("sort_by") or "score").strip().lower()
         sort_order = str(filters.get("sort_order") or "desc").strip().lower()
         sort_desc = sort_order != "asc"
+        market_scope = str(filters.get("market_scope") or "global").strip().lower()
+        if market_scope not in {"global", "all", "us", "india", "nse", "bse"}:
+            market_scope = "global"
 
         universe_limit = int(filters.get("universe_limit") or self.DEFAULT_UNIVERSE_LIMIT)
         result_limit = int(filters.get("limit") or 100)
@@ -804,7 +834,7 @@ class ScreenerService:
 
         has_custom_symbols = bool(clean_symbols)
         if not clean_symbols:
-            clean_symbols = await self._default_symbols(universe_limit)
+            clean_symbols = await self._default_symbols(universe_limit, market_scope=market_scope)
 
         if not clean_symbols:
             return {
@@ -821,6 +851,7 @@ class ScreenerService:
                     "total_matches": 0,
                     "sort_by": sort_by,
                     "sort_order": "desc" if sort_desc else "asc",
+                    "market_scope": market_scope,
                     "elimination_counts": {},
                     "relaxation_suggestions": [],
                 },
@@ -1043,6 +1074,7 @@ class ScreenerService:
                     "symbol": symbol,
                     "name": quote.get("name") or profile.get("name") or symbol,
                     "sector": profile.get("sector"),
+                    "currency": quote.get("currency") or "USD",
                     "price": self._as_number(quote.get("price")),
                     "market_cap": market_cap,
                     "pe": pe,
@@ -1171,6 +1203,7 @@ class ScreenerService:
                 "total_matches": len(rows),
                 "sort_by": sort_by,
                 "sort_order": "desc" if sort_desc else "asc",
+                "market_scope": market_scope,
                 "elimination_counts": dict(elimination_counts),
                 "relaxation_suggestions": suggestions,
             },

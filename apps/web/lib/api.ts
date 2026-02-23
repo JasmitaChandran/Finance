@@ -73,14 +73,20 @@ async function call<T>(path: string, init?: RequestInit, token?: string): Promis
 }
 
 export const api = {
-  searchStocks: (q: string) => call<{ items: Array<{ symbol: string; name: string }> }>(`/stocks/search?q=${encodeURIComponent(q)}`),
-  getUniverse: (params?: { q?: string; offset?: number; limit?: number }) => {
+  searchStocks: (q: string) =>
+    call<{ items: Array<{ symbol: string; name: string; exchange?: string; country?: string; currency?: string }> }>(
+      `/stocks/search?q=${encodeURIComponent(q)}`
+    ),
+  getUniverse: (params?: { q?: string; market?: string; offset?: number; limit?: number }) => {
     const searchParams = new URLSearchParams();
     if (params?.q) searchParams.set("q", params.q);
+    if (params?.market) searchParams.set("market", params.market);
     if (params?.offset !== undefined) searchParams.set("offset", String(params.offset));
     if (params?.limit !== undefined) searchParams.set("limit", String(params.limit));
     const qs = searchParams.toString();
-    return call<{ total: number; items: Array<{ symbol: string; name: string; exchange: string }> }>(`/stocks/universe${qs ? `?${qs}` : ""}`);
+    return call<{ total: number; items: Array<{ symbol: string; name: string; exchange: string; country?: string; currency?: string; base_symbol?: string }> }>(
+      `/stocks/universe${qs ? `?${qs}` : ""}`
+    );
   },
   getHistory: (symbol: string, period = "6mo") =>
     call<{ symbol: string; items: Array<{ date: string; open?: number; high?: number; low?: number; close: number; adj_close?: number; volume: number }> }>(
@@ -106,6 +112,7 @@ export const api = {
   getNewsItems: (symbol: string) => call<{ symbol: string; items: NewsArticle[] }>(`/news/${symbol}/items`),
   runScreener: (payload: {
     symbols?: string[];
+    market_scope?: string;
     min_market_cap?: number;
     max_market_cap?: number;
     min_pe?: number;

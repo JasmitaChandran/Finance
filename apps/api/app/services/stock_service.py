@@ -1032,8 +1032,87 @@ class StockService:
 
     async def search(self, query: str) -> list[dict]:
         key = f"search:{query.lower()}"
-        data = await cache.remember(key, lambda: self._from_providers("search", query), ttl_seconds=300)
-        return self._sanitize_json(data)
+        try:
+            provider_items = await cache.remember(key, lambda: self._from_providers("search", query), ttl_seconds=300)
+        except Exception:
+            provider_items = []
+        items = [item for item in provider_items if isinstance(item, dict)]
+
+        # Merge local universe suggestions so NSE/BSE symbols are consistently discoverable.
+        try:
+            universe = await universe_service.list_stocks(query=query, offset=0, limit=20)
+            items.extend(universe.get("items", []))
+        except Exception:
+            pass
+
+        normalized_query = query.strip().upper()
+        looks_like_plain_india_symbol = (
+            normalized_query
+            and "." not in normalized_query
+            and 1 <= len(normalized_query) <= 15
+            and normalized_query[0].isalpha()
+            and all(ch.isalnum() for ch in normalized_query)
+        )
+        if looks_like_plain_india_symbol:
+            for suffix, exchange in ((".NS", "NSE"), (".BO", "BSE")):
+                symbol = f"{normalized_query}{suffix}"
+                items.append(
+                    {
+                        "symbol": symbol,
+                        "name": f"{normalized_query} ({exchange})",
+                        "exchange": exchange,
+                        "country": "IN",
+                        "currency": "INR",
+                    }
+                )
+
+        dedup: dict[str, dict] = {}
+        for item in items:
+            symbol = str(item.get("symbol") or "").upper().strip()
+            if not symbol:
+                continue
+            exchange = item.get("exchange")
+            if isinstance(exchange, str) and exchange.upper() == "NSI":
+                exchange = "NSE"
+            candidate = {
+                "symbol": symbol,
+                "name": item.get("name") or symbol,
+                "exchange": exchange,
+                "country": item.get("country"),
+                "currency": item.get("currency"),
+            }
+            if symbol not in dedup:
+                dedup[symbol] = candidate
+                continue
+            # Keep the first hit for ranking order, but backfill missing metadata from later sources
+            # (local universe is especially useful for NSE/BSE currency/country info).
+            existing = dedup[symbol]
+            for key in ("exchange", "country", "currency"):
+                if not existing.get(key) and candidate.get(key):
+                    existing[key] = candidate[key]
+            existing_name = str(existing.get("name") or "").strip()
+            if (not existing_name or existing_name == symbol) and candidate.get("name"):
+                existing["name"] = candidate["name"]
+        merged = list(dedup.values())
+
+        def score(item: dict) -> tuple[int, int, str]:
+            symbol = str(item.get("symbol") or "")
+            name = str(item.get("name") or "")
+            s = 0
+            if normalized_query and symbol == normalized_query:
+                s += 100
+            if normalized_query and symbol.startswith(normalized_query):
+                s += 40
+            if normalized_query and normalized_query in name.upper():
+                s += 25
+            if symbol.endswith(".NS"):
+                s += 8
+            if symbol.endswith(".BO"):
+                s += 6
+            return (-s, len(symbol), symbol)
+
+        merged.sort(key=score)
+        return self._sanitize_json(merged[:20])
 
     async def quote(self, symbol: str) -> dict:
         key = f"quote:{symbol.upper()}"

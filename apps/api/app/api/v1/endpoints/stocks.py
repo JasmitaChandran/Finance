@@ -19,10 +19,11 @@ async def search_stocks(q: str = Query(min_length=1, max_length=30)):
 @router.get("/universe")
 async def stock_universe(
     q: str = Query(default="", max_length=60),
+    market: str = Query(default="", max_length=20),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=80, ge=1, le=200),
 ):
-    return await universe_service.list_stocks(query=q, offset=offset, limit=limit)
+    return await universe_service.list_stocks(query=q, market=market, offset=offset, limit=limit)
 
 
 @router.get("/market-heatmap")

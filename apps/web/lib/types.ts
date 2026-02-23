@@ -438,6 +438,7 @@ export interface ScreenerRow {
   symbol: string;
   name?: string;
   sector?: string | null;
+  currency?: string | null;
   price?: number | null;
   market_cap?: number | null;
   pe?: number | null;
@@ -503,6 +504,7 @@ export interface ScreenerRunMeta {
   total_matches?: number;
   sort_by?: string;
   sort_order?: "asc" | "desc" | string;
+  market_scope?: string;
   elimination_counts?: Record<string, number>;
   relaxation_suggestions?: Array<{
     filter: string;

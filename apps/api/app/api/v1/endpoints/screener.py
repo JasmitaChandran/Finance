@@ -10,6 +10,7 @@ router = APIRouter(prefix="/screener", tags=["screener"])
 
 class ScreenerRequest(BaseModel):
     symbols: list[str] = Field(default_factory=list)
+    market_scope: str | None = None
     min_market_cap: float | None = None
     max_market_cap: float | None = None
     min_pe: float | None = None
@@ -59,10 +60,56 @@ def presets():
     return {
         "items": [
             {
+                "id": "india-quality-compounders",
+                "label": "India Quality Compounders",
+                "for": "NSE/BSE large caps with healthy ROE, reasonable valuation, and stable quality signals.",
+                "filters": {
+                    "market_scope": "india",
+                    "min_market_cap": 50000000000,
+                    "min_pe": 8,
+                    "max_pe": 45,
+                    "min_roe": 0.12,
+                    "min_revenue_growth": 0.05,
+                    "max_debt_to_equity": 1.5,
+                    "fcf_positive_5y": True,
+                    "min_earnings_consistency": 80,
+                },
+            },
+            {
+                "id": "india-growth-leaders",
+                "label": "India Growth Leaders",
+                "for": "Indian stocks with stronger revenue growth and momentum filters for active watchlists.",
+                "filters": {
+                    "market_scope": "india",
+                    "min_market_cap": 10000000000,
+                    "max_pe": 90,
+                    "min_roe": 0.08,
+                    "min_revenue_growth": 0.12,
+                    "high_momentum_only": True,
+                    "min_rsi": 45,
+                    "max_rsi": 80,
+                },
+            },
+            {
+                "id": "india-value-income",
+                "label": "India Value & Income",
+                "for": "Indian value screen with debt discipline and dividend-oriented stability.",
+                "filters": {
+                    "market_scope": "india",
+                    "min_market_cap": 10000000000,
+                    "min_pe": 3,
+                    "max_pe": 22,
+                    "min_roe": 0.08,
+                    "max_debt_to_equity": 1.3,
+                    "low_volatility_only": True,
+                },
+            },
+            {
                 "id": "quality-compounders",
                 "label": "Quality Compounders",
                 "for": "High quality, consistent compounders with healthy profitability and balance sheets.",
                 "filters": {
+                    "market_scope": "us",
                     "min_market_cap": 10000000000,
                     "min_pe": 8,
                     "max_pe": 35,
@@ -79,6 +126,7 @@ def presets():
                 "label": "Deep Value",
                 "for": "Low valuation names with acceptable balance-sheet strength and downside control.",
                 "filters": {
+                    "market_scope": "us",
                     "min_market_cap": 5000000000,
                     "min_pe": 3,
                     "max_pe": 16,
@@ -93,6 +141,7 @@ def presets():
                 "label": "High Momentum",
                 "for": "Trend-following screen focused on strong price leadership and breakouts.",
                 "filters": {
+                    "market_scope": "us",
                     "min_market_cap": 2000000000,
                     "min_revenue_growth": 0.08,
                     "high_momentum_only": True,
@@ -107,6 +156,7 @@ def presets():
                 "label": "Turnaround Candidates",
                 "for": "Improving businesses where operating leverage and momentum are turning positive.",
                 "filters": {
+                    "market_scope": "us",
                     "min_market_cap": 1000000000,
                     "max_pe": 45,
                     "min_roe": 0.03,
@@ -120,6 +170,7 @@ def presets():
                 "label": "Low Beta Defensive",
                 "for": "Lower-volatility and lower-beta companies with stable profitability.",
                 "filters": {
+                    "market_scope": "us",
                     "min_market_cap": 10000000000,
                     "max_beta": 0.9,
                     "low_volatility_only": True,
@@ -132,6 +183,7 @@ def presets():
                 "label": "High FCF Yield",
                 "for": "Cash-generating businesses trading at relatively attractive valuations.",
                 "filters": {
+                    "market_scope": "us",
                     "min_market_cap": 3000000000,
                     "max_pe": 28,
                     "min_roe": 0.1,
@@ -144,6 +196,7 @@ def presets():
                 "label": "Small Cap Multibagger",
                 "for": "Smaller companies with strong growth and improving quality indicators.",
                 "filters": {
+                    "market_scope": "us",
                     "min_market_cap": 300000000,
                     "max_market_cap": 12000000000,
                     "min_revenue_growth": 0.15,
@@ -157,6 +210,7 @@ def presets():
                 "label": "Earnings Breakout",
                 "for": "Revenue and EPS acceleration with improving operating leverage and momentum.",
                 "filters": {
+                    "market_scope": "us",
                     "min_market_cap": 2000000000,
                     "min_revenue_growth": 0.1,
                     "min_revenue_cagr_3y": 0.08,
@@ -171,6 +225,7 @@ def presets():
                 "label": "High Growth",
                 "for": "High-risk users seeking aggressive growth and strong recent momentum.",
                 "filters": {
+                    "market_scope": "us",
                     "min_market_cap": 2000000000,
                     "max_pe": 90,
                     "min_roe": 0.08,
@@ -184,6 +239,7 @@ def presets():
                 "label": "Dividend Aristocrats (Proxy)",
                 "for": "Income-oriented users",
                 "filters": {
+                    "market_scope": "us",
                     "min_market_cap": 10000000000,
                     "min_roe": 0.08,
                     "max_debt_to_equity": 1.4,
@@ -196,6 +252,7 @@ def presets():
                 "label": "Insider Buying",
                 "for": "Signal-driven users",
                 "filters": {
+                    "market_scope": "us",
                     "min_market_cap": 2000000000,
                     "min_roe": 0.05,
                     "insider_buying_only": True,
@@ -207,6 +264,7 @@ def presets():
                 "label": "Volume Breakouts",
                 "for": "Swing setups",
                 "filters": {
+                    "market_scope": "us",
                     "breakout_only": True,
                     "volume_spike_only": True,
                     "min_rsi": 45,
