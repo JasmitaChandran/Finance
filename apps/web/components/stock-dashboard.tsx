@@ -49,9 +49,19 @@ type CompareRow = {
   revenue_growth?: number | null;
   profit_margin?: number | null;
   currency?: string | null;
+  similarity_score?: number | null;
+  benchmark_rank?: number | null;
+  sector_match?: boolean | null;
+  industry_match?: boolean | null;
+  market_cap_distance_percent?: number | null;
 };
 
 type LoadWarning = { section: string; message: string };
+type DataSourcePanelMeta = NonNullable<StockDashboardType["data_sources"]>["panels"] extends infer P
+  ? P extends Record<string, infer V>
+    ? V
+    : never
+  : never;
 
 type ScoreBreakdown = {
   quality: number;
@@ -419,12 +429,18 @@ function DataSourceStrip({
   lastUpdated,
   symbol,
   newsCount,
+  dataSources,
 }: {
   lastUpdated: Date | null;
   symbol: string;
   newsCount: number;
+  dataSources?: StockDashboardType["data_sources"];
 }) {
   const session = getSessionInfo(symbol);
+  const panels = dataSources?.panels || {};
+  const quoteMeta = (panels.quote || {}) as DataSourcePanelMeta;
+  const financialsMeta = (panels.financials || {}) as DataSourcePanelMeta;
+  const eventsMeta = (panels.events || {}) as DataSourcePanelMeta;
   return (
     <div className="rounded-2xl border border-borderGlass bg-card p-4 shadow-glow">
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -435,8 +451,9 @@ function DataSourceStrip({
         </div>
         <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-xs">
           <div className="flex items-center gap-2 text-textMain"><Database className="h-4 w-4 text-accent" /> Source labels</div>
-          <p className="mt-2 text-textMuted">Price & charts: <span className="text-textMain">Yahoo-compatible provider</span></p>
-          <p className="mt-1 text-textMuted">Financials: <span className="text-textMain">Free provider aggregate</span></p>
+          <p className="mt-2 text-textMuted">Price & charts: <span className="text-textMain">{String(quoteMeta.source || "unknown")}</span></p>
+          <p className="mt-1 text-textMuted">Financials: <span className="text-textMain">{String(financialsMeta.source || "fallback")}</span></p>
+          <p className="mt-1 text-textMuted">Events: <span className="text-textMain">{String(eventsMeta.source || "unavailable")}</span></p>
         </div>
         <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-xs">
           <div className="flex items-center gap-2 text-textMain"><Activity className="h-4 w-4 text-accent" /> Market session</div>
@@ -448,6 +465,10 @@ function DataSourceStrip({
           <div className="flex items-center gap-2 text-textMain"><BarChart3 className="h-4 w-4 text-accent" /> News & AI</div>
           <p className="mt-2 text-textMuted">News summary feed: <span className="text-textMain">{newsCount} sources</span></p>
           <p className="mt-1 text-textMuted">AI explanations: <span className="text-textMain">On-demand metric explainer</span></p>
+          <p className="mt-1 text-textMuted">
+            Cache status: <span className="text-textMain">{String(quoteMeta.cache_status || "n/a")}</span>
+            {quoteMeta.fallback_used ? <span className="text-warning"> • fallback used</span> : null}
+          </p>
         </div>
       </div>
     </div>
@@ -587,12 +608,23 @@ function PeerSnapshotPanel({
   error,
   currency,
   currencyMode,
+  benchmark,
 }: {
   items: CompareRow[];
   loading: boolean;
   error: string | null;
   currency?: string;
   currencyMode: CurrencyDisplayMode;
+  benchmark?: {
+    peer_count?: number;
+    sector_median_pe?: number | null;
+    sector_median_roe?: number | null;
+    sector_median_revenue_growth?: number | null;
+    sector_median_market_cap?: number | null;
+    company_pe?: number | null;
+    company_roe?: number | null;
+    company_revenue_growth?: number | null;
+  };
 }) {
   return (
     <div className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
@@ -611,32 +643,49 @@ function PeerSnapshotPanel({
       )}
 
       {!!items.length && (
-        <div className="mt-3 overflow-x-auto rounded-xl border border-borderGlass">
+        <>
+          {benchmark && (
+            <div className="mt-3 grid gap-2 rounded-xl border border-borderGlass bg-bgSoft p-3 text-xs md:grid-cols-4">
+              <p className="text-textMuted">Peer count: <span className="text-textMain">{benchmark.peer_count ?? items.length}</span></p>
+              <p className="text-textMuted">Sector median P/E: <span className="text-textMain">{typeof benchmark.sector_median_pe === "number" ? `${benchmark.sector_median_pe.toFixed(2)}x` : "-"}</span></p>
+              <p className="text-textMuted">Sector median ROE: <span className="text-textMain">{typeof benchmark.sector_median_roe === "number" ? ratioToPercent(benchmark.sector_median_roe) : "-"}</span></p>
+              <p className="text-textMuted">Sector median Growth: <span className="text-textMain">{typeof benchmark.sector_median_revenue_growth === "number" ? `${(benchmark.sector_median_revenue_growth * 100).toFixed(2)}%` : "-"}</span></p>
+            </div>
+          )}
+          <div className="mt-3 overflow-x-auto rounded-xl border border-borderGlass">
           <table className="min-w-full text-sm">
             <thead className="bg-bgSoft text-xs uppercase tracking-wide text-textMuted">
               <tr>
+                <th className="px-3 py-2 text-left">Rank</th>
                 <th className="px-3 py-2 text-left">Symbol</th>
                 <th className="px-3 py-2 text-left">Price</th>
                 <th className="px-3 py-2 text-left">Market Cap</th>
                 <th className="px-3 py-2 text-left">P/E</th>
                 <th className="px-3 py-2 text-left">ROE</th>
                 <th className="px-3 py-2 text-left">Growth</th>
+                <th className="px-3 py-2 text-left">Why matched</th>
               </tr>
             </thead>
             <tbody>
               {items.map((item) => (
                 <tr key={item.symbol} className="border-t border-borderGlass text-textMuted">
+                  <td className="px-3 py-2">{item.benchmark_rank ?? "-"}</td>
                   <td className="px-3 py-2 font-semibold text-textMain">{item.symbol}</td>
                   <td className="px-3 py-2">{typeof item.price === "number" ? formatCurrency(item.price, item.currency || currency || "USD") : "-"}</td>
                   <td className="px-3 py-2">{compactCap(item.market_cap, item.currency || currency, currencyMode)}</td>
                   <td className="px-3 py-2">{typeof item.pe === "number" ? `${item.pe.toFixed(2)}x` : "-"}</td>
                   <td className="px-3 py-2">{typeof item.roe === "number" ? ratioToPercent(item.roe) : "-"}</td>
                   <td className="px-3 py-2">{typeof item.revenue_growth === "number" ? `${(item.revenue_growth * 100).toFixed(2)}% YoY` : "-"}</td>
+                  <td className="px-3 py-2 text-xs">
+                    {item.industry_match ? "Industry match" : item.sector_match ? "Sector match" : "Size/metric match"}
+                    {typeof item.market_cap_distance_percent === "number" ? ` • cap Δ ${item.market_cap_distance_percent.toFixed(0)}%` : ""}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        </>
       )}
     </div>
   );
@@ -683,6 +732,11 @@ function StickySummaryBar({
 function IndiaSpecificPanels({ dashboard, summary }: { dashboard: StockDashboardType; summary: StockSummary }) {
   const isIndia = dashboard.quote.symbol.toUpperCase().endsWith(".NS") || dashboard.quote.symbol.toUpperCase().endsWith(".BO");
   if (!isIndia) return null;
+  const india = dashboard.india_context;
+  const ownership = india?.ownership_proxies;
+  const upcoming = india?.upcoming_events;
+  const actions = india?.corporate_actions || dashboard.event_feed?.corporate_actions || [];
+  const highlights = india?.quarterly_results_highlights || [];
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
@@ -691,21 +745,71 @@ function IndiaSpecificPanels({ dashboard, summary }: { dashboard: StockDashboard
           <BadgeIndianRupee className="h-4 w-4 text-accent" />
           <h3 className="font-display text-lg">India-specific Fundamentals</h3>
         </div>
-        <p className="mt-1 text-xs text-textMuted">Promoter/FII/DII/pledge fields depend on a dedicated India market data source. This panel is ready and shows placeholders until enabled.</p>
+        <p className="mt-1 text-xs text-textMuted">
+          Live where available (Yahoo-compatible proxies + corporate actions). Dedicated NSE/BSE shareholding feeds can improve promoter/FII/DII accuracy further.
+        </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm"><p className="text-textMuted">Promoter Holding %</p><p className="mt-1 text-textMain">Provider integration required</p></div>
-          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm"><p className="text-textMuted">FII / DII Trend</p><p className="mt-1 text-textMain">Provider integration required</p></div>
-          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm"><p className="text-textMuted">Pledged Shares %</p><p className="mt-1 text-textMain">Provider integration required</p></div>
-          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm"><p className="text-textMuted">Quarterly Results Highlights</p><p className="mt-1 text-textMain">{summary.bull_case}</p></div>
+          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+            <p className="text-textMuted">Promoter / Insider Holding % (proxy)</p>
+            <p className="mt-1 text-textMain">
+              {typeof ownership?.promoter_or_insider_holding_percent === "number" ? `${ownership.promoter_or_insider_holding_percent.toFixed(2)}%` : "Unavailable"}
+            </p>
+          </div>
+          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+            <p className="text-textMuted">Institutional Holding % (proxy)</p>
+            <p className="mt-1 text-textMain">
+              {typeof ownership?.institutional_holding_percent === "number" ? `${ownership.institutional_holding_percent.toFixed(2)}%` : "Unavailable"}
+            </p>
+          </div>
+          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+            <p className="text-textMuted">FII / DII Trend</p>
+            <p className="mt-1 text-textMain">{india?.fii_dii_trend?.available ? "Live feed connected" : "Not available (needs India ownership flow feed)"}</p>
+          </div>
+          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3 text-sm">
+            <p className="text-textMuted">Pledged Shares %</p>
+            <p className="mt-1 text-textMain">
+              {india?.pledged_shares_percent?.available && typeof india.pledged_shares_percent.value === "number"
+                ? `${india.pledged_shares_percent.value.toFixed(2)}%`
+                : "Not available (needs registry dataset)"}
+            </p>
+          </div>
+        </div>
+        <div className="mt-3 rounded-xl border border-borderGlass bg-bgSoft p-3 text-xs text-textMuted">
+          <p className="font-semibold text-textMain">Quarterly results highlights</p>
+          <ul className="mt-2 space-y-1">
+            {(highlights.length ? highlights : [summary.bull_case]).map((item) => (
+              <li key={item}>• {item}</li>
+            ))}
+          </ul>
         </div>
       </div>
       <div className="rounded-2xl border border-borderGlass bg-card p-5 shadow-glow">
         <h3 className="font-display text-lg">Corporate Actions</h3>
-        <p className="mt-1 text-xs text-textMuted">Bonus, split, rights issue, buyback, and dividend timelines can be shown when corporate action feed is connected.</p>
+        <p className="mt-1 text-xs text-textMuted">Backed by Yahoo corporate actions + calendar events. Rights issues/buybacks need a dedicated India corporate-actions feed.</p>
         <div className="mt-4 space-y-2 text-sm text-textMuted">
-          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3">Dividend signal: <span className="text-textMain">{formatPercentValue(dashboard.market_data?.dividend_yield)}</span></div>
-          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3">Bonus / Split: <span className="text-textMain">No event feed connected yet</span></div>
-          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3">Rights / Buyback: <span className="text-textMain">No event feed connected yet</span></div>
+          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3">Dividend Yield: <span className="text-textMain">{formatPercentValue(dashboard.market_data?.dividend_yield)}</span></div>
+          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3">
+            Upcoming Earnings: <span className="text-textMain">{upcoming?.earnings_date || dashboard.event_feed?.calendar?.earnings_date || "Unavailable"}</span>
+          </div>
+          <div className="rounded-xl border border-borderGlass bg-bgSoft p-3">
+            Ex-Dividend Date: <span className="text-textMain">{upcoming?.ex_dividend_date || dashboard.event_feed?.calendar?.ex_dividend_date || "Unavailable"}</span>
+          </div>
+        </div>
+        <div className="mt-3 rounded-xl border border-borderGlass bg-bgSoft p-3">
+          <p className="text-xs font-semibold text-textMain">Recent Actions</p>
+          {!actions.length ? (
+            <p className="mt-2 text-xs text-textMuted">No recent corporate actions available from provider.</p>
+          ) : (
+            <ul className="mt-2 space-y-2 text-xs text-textMuted">
+              {actions.slice(0, 6).map((action) => (
+                <li key={`${action.type}-${action.date}-${action.label}`} className="rounded-md border border-borderGlass bg-card px-2 py-2">
+                  <span className="text-textMain">{action.date}</span> • {action.label}
+                  {typeof action.amount === "number" ? ` • ${action.amount}` : ""}
+                  {typeof action.ratio === "number" ? ` • ${action.ratio}:1` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </div>
     </div>
@@ -971,6 +1075,29 @@ export function StockDashboard() {
       return;
     }
 
+    if (dashboard?.peer_snapshot?.items?.length) {
+      const backendRows = dashboard.peer_snapshot.items.map((item) => ({
+        symbol: item.symbol,
+        name: item.name ?? null,
+        price: typeof item.price === "number" ? item.price : null,
+        market_cap: typeof item.market_cap === "number" ? item.market_cap : null,
+        pe: typeof item.pe === "number" ? item.pe : null,
+        roe: typeof item.roe === "number" ? item.roe : null,
+        revenue_growth: typeof item.revenue_growth === "number" ? item.revenue_growth : null,
+        profit_margin: typeof item.profit_margin === "number" ? item.profit_margin : null,
+        currency: item.currency ?? dashboard.quote.currency ?? undefined,
+        similarity_score: typeof item.similarity_score === "number" ? item.similarity_score : null,
+        benchmark_rank: typeof item.benchmark_rank === "number" ? item.benchmark_rank : null,
+        sector_match: typeof item.sector_match === "boolean" ? item.sector_match : null,
+        industry_match: typeof item.industry_match === "boolean" ? item.industry_match : null,
+        market_cap_distance_percent: typeof item.market_cap_distance_percent === "number" ? item.market_cap_distance_percent : null,
+      }));
+      setPeerRows(backendRows);
+      setPeerLoading(false);
+      setPeerError(null);
+      return;
+    }
+
     const marketSuffix = symbol.includes(".") ? symbol.slice(symbol.lastIndexOf(".")) : "";
     const nameToken = companyName
       .split(/\s+/)
@@ -1031,7 +1158,7 @@ export function StockDashboard() {
     return () => {
       active = false;
     };
-  }, [dashboard?.profile?.name, dashboard?.quote?.currency, dashboard?.quote?.name, dashboard?.quote?.symbol]);
+  }, [dashboard?.peer_snapshot?.items, dashboard?.profile?.name, dashboard?.quote?.currency, dashboard?.quote?.name, dashboard?.quote?.symbol]);
 
   function speakSummary() {
     if (!summary || typeof window === "undefined" || !("speechSynthesis" in window)) return;
@@ -1097,11 +1224,26 @@ export function StockDashboard() {
   const chartEvents = useMemo(() => {
     const events: Array<{ date: string; label: string; type: "news" | "signal" | "earnings" | "dividend" }> = [];
     const latestChartDate = chartData.length ? chartData[chartData.length - 1].date : undefined;
-    if (latestChartDate && newsBullets.length) {
+    const backendEvents = (dashboard?.event_feed?.items || [])
+      .filter((item) => item?.date && item?.label)
+      .slice(0, 12)
+      .map((item) => {
+        const kind = String(item.type || "").toLowerCase();
+        const mappedType: "news" | "signal" | "earnings" | "dividend" =
+          kind === "earnings"
+            ? "earnings"
+            : kind === "dividend" || kind === "split" || kind === "ex_dividend"
+              ? "dividend"
+              : "signal";
+        return {
+          date: String(item.date).slice(0, 10),
+          label: String(item.label),
+          type: mappedType,
+        };
+      });
+    events.push(...backendEvents);
+    if (!backendEvents.length && latestChartDate && newsBullets.length) {
       events.push({ date: latestChartDate, label: newsBullets[0].slice(0, 32), type: "news" });
-    }
-    if (latestChartDate && marketData?.dividend_yield && marketData.dividend_yield > 0) {
-      events.push({ date: latestChartDate, label: "Dividend signal", type: "dividend" });
     }
     if (chartData.length >= 20) {
       const recent = chartData.slice(-10);
@@ -1111,8 +1253,13 @@ export function StockDashboard() {
         events.push({ date: latestChartDate, label: "Volume spike", type: "signal" });
       }
     }
-    return events.slice(0, 4);
-  }, [chartData, marketData?.dividend_yield, newsBullets]);
+    const dedup = new Map<string, { date: string; label: string; type: "news" | "signal" | "earnings" | "dividend" }>();
+    for (const event of events) {
+      const key = `${event.date}:${event.type}:${event.label}`;
+      if (!dedup.has(key)) dedup.set(key, event);
+    }
+    return Array.from(dedup.values()).slice(0, 6);
+  }, [chartData, dashboard?.event_feed?.items, newsBullets]);
 
   const averageRecentVolume = useMemo(() => {
     if (!history.length) return null;
@@ -1220,6 +1367,10 @@ export function StockDashboard() {
   const currentSymbol = dashboard?.quote.symbol || "AAPL";
   const currentCurrency = dashboard?.quote.currency || "USD";
   const isINR = currentCurrency === "INR";
+  const combinedWarnings = [
+    ...(dashboard?.data_sources?.warnings || []),
+    ...loadWarnings,
+  ];
 
   return (
     <section className="space-y-6 animate-rise">
@@ -1347,7 +1498,7 @@ export function StockDashboard() {
         />
       )}
 
-      <InlineWarningBanners warnings={loadWarnings} />
+      <InlineWarningBanners warnings={combinedWarnings} />
 
       {loading && !dashboard && <DashboardSkeleton />}
 
@@ -1355,7 +1506,7 @@ export function StockDashboard() {
         <>
           <ScoreStrip breakdown={scoreModel.breakdown} total={scoreModel.total} expanded={scoreExplainOpen} onToggle={() => setScoreExplainOpen((prev) => !prev)} />
 
-          <DataSourceStrip lastUpdated={lastUpdatedAt} symbol={dashboard.quote.symbol} newsCount={news?.source_count ?? 0} />
+          <DataSourceStrip lastUpdated={lastUpdatedAt} symbol={dashboard.quote.symbol} newsCount={news?.source_count ?? 0} dataSources={dashboard.data_sources} />
 
           <WhatChangedTodayPanel
             change1d={toNumber(marketData?.changes_percent?.["1d"] ?? null)}
@@ -1369,7 +1520,14 @@ export function StockDashboard() {
             profitMargin={profitMargin}
           />
 
-          <PeerSnapshotPanel items={peerRows} loading={peerLoading} error={peerError} currency={dashboard.quote.currency} currencyMode={currencyDisplayMode} />
+          <PeerSnapshotPanel
+            items={peerRows}
+            loading={peerLoading}
+            error={peerError}
+            currency={dashboard.quote.currency}
+            currencyMode={currencyDisplayMode}
+            benchmark={dashboard.peer_snapshot?.benchmark}
+          />
 
           {isBeginner ? (
             <>

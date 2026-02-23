@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from datetime import date, datetime
 
 import yfinance as yf
 
@@ -75,6 +76,7 @@ class YahooFinanceProvider(StockProvider):
             "website": info.get("website"),
             "description": info.get("longBusinessSummary"),
             "country": info.get("country"),
+            "exchange": info.get("exchange") or info.get("exchangeName"),
             "trailing_pe": info.get("trailingPE"),
             "roe": info.get("returnOnEquity"),
             "roce": info.get("returnOnCapital") or info.get("returnOnCapitalEmployed") or info.get("returnOnAssets"),
@@ -97,6 +99,9 @@ class YahooFinanceProvider(StockProvider):
             "shares_outstanding": info.get("sharesOutstanding"),
             "week_52_high": info.get("fiftyTwoWeekHigh") or fast_info.get("yearHigh"),
             "week_52_low": info.get("fiftyTwoWeekLow") or fast_info.get("yearLow"),
+            "held_percent_insiders": info.get("heldPercentInsiders"),
+            "held_percent_institutions": info.get("heldPercentInstitutions"),
+            "shares_percent_shares_out": info.get("sharesPercentSharesOut"),
         }
 
     async def get_history(self, symbol: str, period: str = "6mo") -> list[dict]:
@@ -134,6 +139,140 @@ class YahooFinanceProvider(StockProvider):
             for item in quotes
             if item.get("symbol")
         ]
+
+    @staticmethod
+    def _iso_date(value) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        if hasattr(value, "to_pydatetime"):
+            try:
+                return value.to_pydatetime().date().isoformat()
+            except Exception:
+                pass
+        try:
+            text = str(value)
+            if len(text) >= 10:
+                return text[:10]
+        except Exception:
+            return None
+        return None
+
+    async def get_events(self, symbol: str, limit: int = 24) -> dict:
+        ticker = yf.Ticker(symbol)
+        actions = await asyncio.to_thread(lambda: ticker.actions)
+        calendar = await asyncio.to_thread(lambda: ticker.calendar)
+
+        items: list[dict] = []
+        corporate_actions: list[dict] = []
+
+        if actions is not None and not getattr(actions, "empty", True):
+            for idx, row in actions.tail(max(limit * 2, 24)).iterrows():
+                event_date = self._iso_date(idx)
+                if not event_date:
+                    continue
+                dividend = self._to_number(row.get("Dividends")) if hasattr(row, "get") else None
+                split = self._to_number(row.get("Stock Splits")) if hasattr(row, "get") else None
+
+                if dividend is not None and dividend > 0:
+                    payload = {
+                        "date": event_date,
+                        "type": "dividend",
+                        "label": f"Dividend announced ({dividend:g})",
+                        "value": dividend,
+                        "source": "yahoo_actions",
+                    }
+                    items.append(payload)
+                    corporate_actions.append(
+                        {
+                            "date": event_date,
+                            "type": "dividend",
+                            "label": "Dividend",
+                            "amount": dividend,
+                            "source": "yahoo_actions",
+                        }
+                    )
+
+                if split is not None and split > 0:
+                    payload = {
+                        "date": event_date,
+                        "type": "split",
+                        "label": f"Stock split ({split:g}:1)",
+                        "value": split,
+                        "source": "yahoo_actions",
+                    }
+                    items.append(payload)
+                    corporate_actions.append(
+                        {
+                            "date": event_date,
+                            "type": "split",
+                            "label": "Stock Split",
+                            "ratio": split,
+                            "source": "yahoo_actions",
+                        }
+                    )
+
+        calendar_payload: dict = {}
+        if isinstance(calendar, dict):
+            earnings_dates = calendar.get("Earnings Date")
+            if isinstance(earnings_dates, list) and earnings_dates:
+                earnings_date = self._iso_date(earnings_dates[0])
+            else:
+                earnings_date = self._iso_date(earnings_dates)
+            ex_dividend_date = self._iso_date(calendar.get("Ex-Dividend Date"))
+            dividend_date = self._iso_date(calendar.get("Dividend Date"))
+
+            if earnings_date:
+                items.append(
+                    {
+                        "date": earnings_date,
+                        "type": "earnings",
+                        "label": "Earnings date",
+                        "source": "yahoo_calendar",
+                    }
+                )
+            if ex_dividend_date:
+                items.append(
+                    {
+                        "date": ex_dividend_date,
+                        "type": "ex_dividend",
+                        "label": "Ex-dividend date",
+                        "source": "yahoo_calendar",
+                    }
+                )
+
+            calendar_payload = {
+                "earnings_date": earnings_date,
+                "ex_dividend_date": ex_dividend_date,
+                "dividend_date": dividend_date,
+                "earnings_estimates": {
+                    "eps_high": self._to_number(calendar.get("Earnings High")),
+                    "eps_low": self._to_number(calendar.get("Earnings Low")),
+                    "eps_average": self._to_number(calendar.get("Earnings Average")),
+                    "revenue_high": self._to_number(calendar.get("Revenue High")),
+                    "revenue_low": self._to_number(calendar.get("Revenue Low")),
+                    "revenue_average": self._to_number(calendar.get("Revenue Average")),
+                },
+            }
+
+        # Newest first, dedupe by date+type
+        dedup: dict[tuple[str, str], dict] = {}
+        for item in sorted(items, key=lambda event: (str(event.get("date") or ""), str(event.get("type") or "")), reverse=True):
+            key = (str(item.get("date") or ""), str(item.get("type") or ""))
+            if key not in dedup:
+                dedup[key] = item
+        final_items = list(dedup.values())[: max(10, limit)]
+        corporate_actions_sorted = sorted(corporate_actions, key=lambda event: str(event.get("date") or ""), reverse=True)[: max(8, limit)]
+
+        return {
+            "items": final_items,
+            "corporate_actions": corporate_actions_sorted,
+            "calendar": calendar_payload,
+            "available_types": sorted({str(item.get("type")) for item in final_items if item.get("type")}),
+        }
 
     @staticmethod
     def _norm_metric(name: str) -> str:

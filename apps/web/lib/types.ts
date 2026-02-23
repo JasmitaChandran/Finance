@@ -323,6 +323,121 @@ export interface StockDashboard {
     close?: number | null;
     adjusted_close?: number | null;
   };
+  peer_snapshot?: {
+    items: Array<{
+      symbol: string;
+      name?: string | null;
+      sector?: string | null;
+      industry?: string | null;
+      currency?: string | null;
+      price?: number | null;
+      market_cap?: number | null;
+      pe?: number | null;
+      roe?: number | null;
+      revenue_growth?: number | null;
+      profit_margin?: number | null;
+      similarity_score?: number | null;
+      sector_match?: boolean | null;
+      industry_match?: boolean | null;
+      market_cap_distance_percent?: number | null;
+      benchmark_rank?: number | null;
+    }>;
+    benchmark?: {
+      peer_count?: number;
+      sector_median_pe?: number | null;
+      sector_median_roe?: number | null;
+      sector_median_revenue_growth?: number | null;
+      sector_median_market_cap?: number | null;
+      company_pe?: number | null;
+      company_roe?: number | null;
+      company_revenue_growth?: number | null;
+    };
+  };
+  event_feed?: {
+    source?: string;
+    generated_at?: string;
+    available_types?: string[];
+    items: Array<{
+      date: string;
+      type: string;
+      label: string;
+      value?: number | null;
+      source?: string;
+    }>;
+    corporate_actions?: Array<{
+      date: string;
+      type: string;
+      label: string;
+      amount?: number | null;
+      ratio?: number | null;
+      source?: string;
+    }>;
+    calendar?: {
+      earnings_date?: string | null;
+      ex_dividend_date?: string | null;
+      dividend_date?: string | null;
+      earnings_estimates?: {
+        eps_high?: number | null;
+        eps_low?: number | null;
+        eps_average?: number | null;
+        revenue_high?: number | null;
+        revenue_low?: number | null;
+        revenue_average?: number | null;
+      };
+    };
+  };
+  india_context?: {
+    exchange?: string | null;
+    ownership_proxies?: {
+      promoter_or_insider_holding_percent?: number | null;
+      institutional_holding_percent?: number | null;
+      public_float_estimated_percent?: number | null;
+      source?: string | null;
+      notes?: string | null;
+    };
+    pledged_shares_percent?: {
+      value?: number | null;
+      available?: boolean;
+      source?: string | null;
+      notes?: string | null;
+    };
+    fii_dii_trend?: {
+      available?: boolean;
+      source?: string | null;
+      notes?: string | null;
+    };
+    quarterly_results_highlights?: string[];
+    corporate_actions?: Array<{
+      date: string;
+      type: string;
+      label: string;
+      amount?: number | null;
+      ratio?: number | null;
+      source?: string;
+    }>;
+    upcoming_events?: {
+      earnings_date?: string | null;
+      ex_dividend_date?: string | null;
+      dividend_date?: string | null;
+      earnings_estimates?: Record<string, number | null | undefined> | null;
+    };
+  } | null;
+  data_sources?: {
+    generated_at?: string;
+    panels?: Record<
+      string,
+      {
+        source?: string | null;
+        fallback_used?: boolean;
+        attempted_providers?: string[];
+        provider_errors?: string[];
+        cache_status?: string;
+        cached_at?: string;
+        ttl_seconds?: number;
+      }
+    >;
+    warnings?: Array<{ section: string; message: string }>;
+  };
   financial_statements?: FinancialStatementsData | null;
   ratio_dashboard?: RatioDashboardData | null;
   valuation_engine?: ValuationEngineData | null;

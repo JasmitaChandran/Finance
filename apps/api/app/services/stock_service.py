@@ -29,6 +29,30 @@ class StockService:
         "basicmaterials": ["LIN", "APD", "NEM", "FCX", "ECL", "SHW", "NUE", "DOW"],
     }
     FALLBACK_PEERS = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "JPM", "V", "WMT", "XOM"]
+    INDIA_SECTOR_PEERS = {
+        "technology": ["TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "TECHM.NS", "LTIM.NS"],
+        "financialservices": ["HDFCBANK.NS", "ICICIBANK.NS", "KOTAKBANK.NS", "AXISBANK.NS", "SBIN.NS", "BAJFINANCE.NS"],
+        "energy": ["RELIANCE.NS", "ONGC.NS", "IOC.NS", "BPCL.NS", "HINDPETRO.NS", "GAIL.NS"],
+        "consumercyclical": ["MARUTI.NS", "TATAMOTORS.NS", "M&M.NS", "EICHERMOT.NS", "TRENT.NS"],
+        "consumerdefensive": ["ITC.NS", "HINDUNILVR.NS", "NESTLEIND.NS", "DABUR.NS", "BRITANNIA.NS"],
+        "healthcare": ["SUNPHARMA.NS", "DRREDDY.NS", "CIPLA.NS", "DIVISLAB.NS", "APOLLOHOSP.NS"],
+        "industrials": ["LT.NS", "SIEMENS.NS", "ABB.NS", "HAL.NS", "BEL.NS"],
+        "utilities": ["NTPC.NS", "POWERGRID.NS", "TATAPOWER.NS", "ADANIPOWER.NS"],
+        "basicmaterials": ["ULTRACEMCO.NS", "JSWSTEEL.NS", "TATASTEEL.NS", "HINDALCO.NS", "GRASIM.NS"],
+        "communicationservices": ["BHARTIARTL.NS", "TATACOMM.NS", "INDUSTOWER.NS"],
+    }
+    FALLBACK_PEERS_INDIA = [
+        "RELIANCE.NS",
+        "TCS.NS",
+        "HDFCBANK.NS",
+        "ICICIBANK.NS",
+        "INFY.NS",
+        "ITC.NS",
+        "LT.NS",
+        "SBIN.NS",
+        "BHARTIARTL.NS",
+        "HINDUNILVR.NS",
+    ]
     MARKET_HEATMAP_SYMBOLS = [
         "AAPL",
         "MSFT",
@@ -524,18 +548,103 @@ class StockService:
         sector = profile.get("sector") or profile.get("industry") or ""
         return self._norm_metric(sector)
 
+    @staticmethod
+    def _is_india_symbol(symbol: str) -> bool:
+        upper = str(symbol or "").upper()
+        return upper.endswith(".NS") or upper.endswith(".BO")
+
     def _select_peer_symbols(self, symbol: str, profile: dict) -> list[str]:
         key = self._sector_key(profile)
-        peers = self.SECTOR_PEERS.get(key, self.FALLBACK_PEERS)
+        if self._is_india_symbol(symbol):
+            peers = self.INDIA_SECTOR_PEERS.get(key, self.FALLBACK_PEERS_INDIA)
+        else:
+            peers = self.SECTOR_PEERS.get(key, self.FALLBACK_PEERS)
         dedup: list[str] = []
         upper_symbol = symbol.upper()
         for peer in peers:
             candidate = peer.upper()
             if candidate == upper_symbol:
                 continue
+            if self._is_india_symbol(upper_symbol) and not self._is_india_symbol(candidate):
+                continue
+            if not self._is_india_symbol(upper_symbol) and self._is_india_symbol(candidate):
+                continue
             if candidate not in dedup:
                 dedup.append(candidate)
         return dedup[:8]
+
+    async def _from_providers_with_meta(self, method_name: str, *args, **kwargs) -> dict:
+        errors: list[str] = []
+        attempted: list[str] = []
+        for provider in self.providers:
+            ready = getattr(provider, "_ready", None)
+            if callable(ready):
+                try:
+                    if not ready():
+                        continue
+                except Exception:
+                    pass
+            attempted.append(provider.name)
+            try:
+                method = getattr(provider, method_name)
+                data = await method(*args, **kwargs)
+                return {
+                    "data": data,
+                    "meta": {
+                        "source": provider.name,
+                        "fallback_used": bool(errors),
+                        "attempted_providers": attempted,
+                        "provider_errors": errors[:5],
+                    },
+                }
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover
+                errors.append(f"{provider.name}: {exc}")
+                continue
+        detail = errors[0] if errors else "No configured providers are available."
+        raise HTTPException(status_code=503, detail=f"Data providers unavailable: {detail}")
+
+    async def _cached_provider_call_with_meta(self, cache_key: str, ttl_seconds: int, method_name: str, *args, **kwargs) -> tuple[Any, dict]:
+        cached = await cache.get(cache_key)
+        if isinstance(cached, dict) and "data" in cached and isinstance(cached.get("meta"), dict):
+            meta = dict(cached.get("meta") or {})
+            meta["cache_status"] = "hit"
+            return cached.get("data"), meta
+
+        wrapped = await self._from_providers_with_meta(method_name, *args, **kwargs)
+        meta = dict(wrapped.get("meta") or {})
+        meta["cache_status"] = "miss"
+        meta["cached_at"] = datetime.now(timezone.utc).isoformat()
+        payload = {"data": wrapped.get("data"), "meta": meta}
+        await cache.set(cache_key, payload, ttl_seconds=ttl_seconds)
+        return wrapped.get("data"), meta
+
+    def _yahoo_provider(self) -> YahooFinanceProvider | None:
+        for provider in self.providers:
+            if isinstance(provider, YahooFinanceProvider):
+                return provider
+        return None
+
+    async def _event_feed(self, symbol: str) -> dict:
+        cache_key = f"events:{symbol.upper()}"
+        cached = await cache.get(cache_key)
+        if isinstance(cached, dict) and "items" in cached:
+            return cached
+        provider = self._yahoo_provider()
+        if not provider or not hasattr(provider, "get_events"):
+            return {"items": [], "corporate_actions": [], "calendar": {}, "available_types": [], "source": "unavailable"}
+        try:
+            payload = await provider.get_events(symbol)  # type: ignore[attr-defined]
+        except Exception:
+            payload = {"items": [], "corporate_actions": [], "calendar": {}, "available_types": []}
+        result = {
+            **(payload if isinstance(payload, dict) else {}),
+            "source": "yahoo",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await cache.set(cache_key, result, ttl_seconds=600)
+        return result
 
     def _project_dcf(
         self,
@@ -820,6 +929,171 @@ class StockService:
                 "company": company_metrics,
                 "industry_median": peer_medians,
                 "premium_discount_percent": premium_discount,
+            },
+        }
+
+    async def _dashboard_peer_snapshot(self, symbol: str, quote: dict, profile: dict) -> dict:
+        company_symbol = str(symbol or "").upper()
+        company_market_cap = self._as_number(quote.get("market_cap"))
+        company_sector = self._sector_key(profile)
+        company_industry = self._norm_metric(profile.get("industry"))
+        target_suffix = ".NS" if company_symbol.endswith(".NS") else ".BO" if company_symbol.endswith(".BO") else ""
+        peer_symbols = self._select_peer_symbols(company_symbol, profile)
+
+        async def _load(peer_symbol: str):
+            try:
+                peer_quote, peer_profile = await asyncio.gather(self.quote(peer_symbol), self.profile(peer_symbol))
+            except Exception:
+                return None
+
+            peer_sector_key = self._sector_key(peer_profile)
+            peer_industry_key = self._norm_metric(peer_profile.get("industry"))
+            peer_market_cap = self._as_number(peer_quote.get("market_cap"))
+            cap_distance_pct = None
+            if company_market_cap and company_market_cap > 0 and peer_market_cap and peer_market_cap > 0:
+                cap_distance_pct = abs(peer_market_cap - company_market_cap) / company_market_cap * 100
+
+            completeness = sum(
+                1
+                for value in (
+                    peer_profile.get("trailing_pe"),
+                    peer_profile.get("roe"),
+                    peer_profile.get("revenue_growth"),
+                    peer_quote.get("market_cap"),
+                )
+                if self._as_number(value) is not None
+            )
+
+            score = 0.0
+            if peer_industry_key and company_industry and peer_industry_key == company_industry:
+                score += 45
+            if peer_sector_key and company_sector and peer_sector_key == company_sector:
+                score += 30
+            if cap_distance_pct is not None:
+                score += max(0, 25 - min(cap_distance_pct, 250) / 10)
+            score += completeness * 3
+
+            return {
+                "symbol": str(peer_quote.get("symbol") or peer_symbol).upper(),
+                "name": peer_profile.get("name") or peer_quote.get("name") or peer_symbol,
+                "sector": peer_profile.get("sector"),
+                "industry": peer_profile.get("industry"),
+                "currency": peer_quote.get("currency"),
+                "price": self._as_number(peer_quote.get("price")),
+                "market_cap": peer_market_cap,
+                "pe": self._as_number(peer_profile.get("trailing_pe")),
+                "roe": self._normalize_rate(peer_profile.get("roe")),
+                "revenue_growth": self._normalize_rate(peer_profile.get("revenue_growth")),
+                "profit_margin": self._normalize_rate(peer_profile.get("profit_margin")),
+                "similarity_score": round(score, 2),
+                "sector_match": peer_sector_key == company_sector if company_sector else None,
+                "industry_match": peer_industry_key == company_industry if company_industry else None,
+                "market_cap_distance_percent": cap_distance_pct,
+            }
+
+        peer_rows = await asyncio.gather(*[_load(peer_symbol) for peer_symbol in peer_symbols[:10]])
+        items = [row for row in peer_rows if isinstance(row, dict)]
+
+        if target_suffix:
+            items = [row for row in items if str(row.get("symbol") or "").upper().endswith(target_suffix)]
+
+        items.sort(
+            key=lambda row: (
+                -(self._as_number(row.get("similarity_score")) or 0),
+                self._as_number(row.get("market_cap_distance_percent")) or 1e9,
+                str(row.get("symbol") or ""),
+            )
+        )
+        ranked = []
+        for idx, row in enumerate(items[:5], start=1):
+            ranked.append({**row, "benchmark_rank": idx})
+
+        benchmark = {
+            "peer_count": len(items),
+            "sector_median_pe": self._median([row.get("pe") for row in items]),
+            "sector_median_roe": self._median([row.get("roe") for row in items]),
+            "sector_median_revenue_growth": self._median([row.get("revenue_growth") for row in items]),
+            "sector_median_market_cap": self._median([row.get("market_cap") for row in items]),
+            "company_pe": self._as_number(profile.get("trailing_pe")),
+            "company_roe": self._normalize_rate(profile.get("roe")),
+            "company_revenue_growth": self._normalize_rate(profile.get("revenue_growth")),
+        }
+
+        return {"items": ranked, "benchmark": benchmark}
+
+    def _quarterly_results_highlights(self, financial_statements: dict[str, Any], ratio_dashboard: dict[str, Any]) -> list[str]:
+        years = [str(year) for year in (financial_statements.get("years") or []) if year is not None]
+        latest_year = years[0] if years else None
+        prev_year = years[1] if len(years) > 1 else None
+        if not latest_year:
+            return []
+        latest = self._extract_statement_values(financial_statements, latest_year)
+        previous = self._extract_statement_values(financial_statements, prev_year) if prev_year else {}
+        items: list[str] = []
+
+        def yoy_line(label: str, key: str):
+            current = self._as_number(latest.get(key))
+            old = self._as_number(previous.get(key))
+            if current is None or old in (None, 0):
+                return None
+            change = ((current - old) / old) * 100
+            return f"{label}: {change:+.1f}% YoY"
+
+        for label, key in (("Revenue", "revenue"), ("Operating income", "operating_income"), ("Net income", "net_income"), ("Operating cash flow", "operating_cash_flow")):
+            line = yoy_line(label, key)
+            if line:
+                items.append(line)
+
+        profitability = ratio_dashboard.get("profitability", {}) if isinstance(ratio_dashboard, dict) else {}
+        net_margin = self._as_number(profitability.get("net_margin"))
+        roe = self._as_number(profitability.get("roe"))
+        if net_margin is not None:
+            items.append(f"Net margin: {net_margin * 100:.1f}%")
+        if roe is not None:
+            items.append(f"ROE: {roe * 100:.1f}%")
+
+        return items[:6]
+
+    def _build_india_context(self, symbol: str, profile: dict, financial_statements: dict[str, Any], ratio_dashboard: dict[str, Any], event_feed: dict) -> dict | None:
+        if not self._is_india_symbol(symbol):
+            return None
+
+        insiders = self._normalize_rate(profile.get("held_percent_insiders"))
+        institutions = self._normalize_rate(profile.get("held_percent_institutions"))
+        public_est = None
+        if insiders is not None or institutions is not None:
+            public_est = max(0.0, 1.0 - (insiders or 0.0) - (institutions or 0.0))
+
+        calendar = event_feed.get("calendar") if isinstance(event_feed, dict) else {}
+        actions = event_feed.get("corporate_actions") if isinstance(event_feed, dict) else []
+
+        return {
+            "exchange": "NSE" if str(symbol).upper().endswith(".NS") else "BSE" if str(symbol).upper().endswith(".BO") else None,
+            "ownership_proxies": {
+                "promoter_or_insider_holding_percent": insiders * 100 if insiders is not None else None,
+                "institutional_holding_percent": institutions * 100 if institutions is not None else None,
+                "public_float_estimated_percent": public_est * 100 if public_est is not None else None,
+                "source": "yahoo_info_proxy",
+                "notes": "Promoter/FII/DII are approximated using available insider/institutional holdings when exact Indian registry data is unavailable.",
+            },
+            "pledged_shares_percent": {
+                "value": None,
+                "available": False,
+                "source": None,
+                "notes": "Pledged shares requires a dedicated India-specific shareholding dataset.",
+            },
+            "fii_dii_trend": {
+                "available": False,
+                "source": None,
+                "notes": "FII/DII trend requires a dedicated Indian ownership flow feed.",
+            },
+            "quarterly_results_highlights": self._quarterly_results_highlights(financial_statements, ratio_dashboard),
+            "corporate_actions": actions[:10] if isinstance(actions, list) else [],
+            "upcoming_events": {
+                "earnings_date": calendar.get("earnings_date") if isinstance(calendar, dict) else None,
+                "ex_dividend_date": calendar.get("ex_dividend_date") if isinstance(calendar, dict) else None,
+                "dividend_date": calendar.get("dividend_date") if isinstance(calendar, dict) else None,
+                "earnings_estimates": calendar.get("earnings_estimates") if isinstance(calendar, dict) else None,
             },
         }
 
@@ -1146,14 +1420,35 @@ class StockService:
         return self._sanitize_json(data)
 
     async def dashboard(self, symbol: str) -> dict:
-        quote = await self.quote(symbol)
-        profile = await self.profile(symbol)
-        history = await self.history(symbol)
-        history_5y = await self.history(symbol, period="5y")
+        upper_symbol = symbol.upper()
+
+        quote, quote_meta = await self._cached_provider_call_with_meta(f"meta:quote:{upper_symbol}", 60, "get_quote", symbol)
+        profile, profile_meta = await self._cached_provider_call_with_meta(f"meta:profile:{upper_symbol}", 900, "get_profile", symbol)
+        history, history_meta = await self._cached_provider_call_with_meta(f"meta:history:{upper_symbol}:6mo", 300, "get_history", symbol, "6mo")
+        history_5y, history_5y_meta = await self._cached_provider_call_with_meta(f"meta:history:{upper_symbol}:5y", 300, "get_history", symbol, "5y")
         try:
-            financial_statements = await self.financial_statements(symbol, years=10)
+            financial_statements, financials_meta = await self._cached_provider_call_with_meta(f"meta:financials:{upper_symbol}:10", 6 * 3600, "get_financials", symbol, 10)
         except HTTPException:
             financial_statements = {"years": [], "income_statement": {"raw": [], "common_size": []}, "balance_sheet": {"raw": [], "common_size": []}, "cash_flow": {"raw": [], "common_size": []}}
+            financials_meta = {
+                "source": None,
+                "fallback_used": True,
+                "attempted_providers": [],
+                "provider_errors": ["financials: provider unavailable"],
+                "cache_status": "miss",
+            }
+
+        # Normalize history in case cached wrapper contains non-sanitized rows.
+        history = [
+            row
+            for row in (history or [])
+            if isinstance(row, dict) and self._is_finite_number(row.get("close")) and self._is_finite_number(row.get("volume"))
+        ]
+        history_5y = [
+            row
+            for row in (history_5y or [])
+            if isinstance(row, dict) and self._is_finite_number(row.get("close")) and self._is_finite_number(row.get("volume"))
+        ]
 
         ratio_dashboard = self._build_ratio_dashboard(quote, profile, financial_statements)
         profitability = ratio_dashboard.get("profitability", {}) if isinstance(ratio_dashboard, dict) else {}
@@ -1232,6 +1527,28 @@ class StockService:
             "debt_to_equity": self._as_number(ratios.get("debt_to_equity")),
         }
         valuation_engine = await self._build_valuation_engine(symbol, quote, profile, financial_statements)
+        peer_snapshot = await self._dashboard_peer_snapshot(symbol, quote, profile)
+        event_feed = await self._event_feed(symbol)
+        india_context = self._build_india_context(symbol, profile, financial_statements, ratio_dashboard, event_feed)
+
+        backend_warnings: list[dict[str, str]] = []
+        for section, meta in (
+            ("Quote", quote_meta),
+            ("Profile", profile_meta),
+            ("Price history", history_meta),
+            ("5Y history", history_5y_meta),
+            ("Financial statements", financials_meta),
+        ):
+            if not isinstance(meta, dict):
+                continue
+            if meta.get("fallback_used"):
+                source = meta.get("source") or "fallback"
+                backend_warnings.append(
+                    {
+                        "section": section,
+                        "message": f"Fallback path used. Current source: {source}.",
+                    }
+                )
 
         dashboard = {
             "quote": quote,
@@ -1244,6 +1561,27 @@ class StockService:
             "financial_statements": financial_statements,
             "ratio_dashboard": ratio_dashboard,
             "valuation_engine": valuation_engine,
+            "peer_snapshot": peer_snapshot,
+            "event_feed": event_feed,
+            "india_context": india_context,
+            "data_sources": {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "panels": {
+                    "quote": {**quote_meta, "ttl_seconds": 60},
+                    "profile": {**profile_meta, "ttl_seconds": 900},
+                    "history_6mo": {**history_meta, "ttl_seconds": 300},
+                    "history_5y": {**history_5y_meta, "ttl_seconds": 300},
+                    "financials": {**financials_meta, "ttl_seconds": 21600},
+                    "events": {
+                        "source": event_feed.get("source"),
+                        "fallback_used": False,
+                        "cache_status": "n/a",
+                        "ttl_seconds": 600,
+                        "provider_errors": [],
+                    },
+                },
+                "warnings": backend_warnings,
+            },
         }
         return self._sanitize_json(dashboard)
 
